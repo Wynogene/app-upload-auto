@@ -38,6 +38,8 @@ class UploadRequest(BaseModel):
     track: str | None = None  # Android only
     # Android: 允许正式轨道（仍需 CLI 显式传参）
     allow_production: bool = False
+    # Android: 分阶段发布比例（0~1 小数）。None=全面发布；0<f<1=分批放量。
+    rollout_fraction: float | None = None
     operator_open_id: str | None = None
 
 
@@ -56,6 +58,10 @@ class SubmitRequest(BaseModel):
     allow_production: bool = False
     # completed=发布/送审；draft=仅草稿不对外
     release_status: str = "completed"
+    # Android: 分阶段发布比例（0~1 小数）。
+    # None=保持 release_status 语义；0<f<1=分批放量（status 强制 inProgress）；
+    # f>=1=结束分批转全面发布。
+    rollout_fraction: float | None = None
     operator_open_id: str | None = None
 
 

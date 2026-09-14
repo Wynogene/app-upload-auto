@@ -29,6 +29,20 @@ from app.stores.base import StoreClient
 SAFE_TRACKS = frozenset({"internal", "alpha", "beta"})
 PROD_TRACKS = frozenset({"production", "prod"})
 
+# Google Play API 的 Release.status 枚举是**驼峰**的 `inProgress`，
+# 小写 `inprogress` 会被 400 拒绝。内部统一用小写，出网前再映射回去。
+_API_RELEASE_STATUS = {
+    "completed": "completed",
+    "draft": "draft",
+    "halted": "halted",
+    "inprogress": "inProgress",
+}
+
+
+def _to_api_status(status: str) -> str:
+    """内部小写状态 -> Google API 要求的枚举字面量。"""
+    return _API_RELEASE_STATUS.get((status or "").strip().lower(), "completed")
+
 
 def _normalize_track(track: str) -> str:
     t = track.strip().lower()
@@ -225,14 +239,19 @@ class GoogleStoreClient(StoreClient):
         version_code: str | int,
         release_notes: list[dict[str, str]] | None = None,
         release_status: str = "completed",
+        user_fraction: float | None = None,
     ) -> dict:
         status = (release_status or "completed").strip().lower()
         if status not in {"completed", "draft", "halted", "inprogress"}:
             status = "completed"
         release: dict = {
             "versionCodes": [str(version_code)],
-            "status": status,
+            "status": _to_api_status(status),
         }
+        # 分阶段发布：Google 只在 status inProgress/halted 时接受 userFraction，
+        # 且必须严格落在 (0, 1)。全面发布（completed）绝不能带这个字段。
+        if user_fraction is not None and status in {"inprogress", "halted"}:
+            release["userFraction"] = float(user_fraction)
         # releaseNotes 在 API 中是可选的。省略 = 商店不展示版本说明；
         # 绝不能替用户编一句，否则正式版会把工具文案展示给真实用户。
         if release_notes:
@@ -275,6 +294,27 @@ class GoogleStoreClient(StoreClient):
                 platform=Platform.ANDROID,
                 message=str(exc),
             )
+
+        # 分阶段发布同样要在「上传大文件之前」校验完
+        from app.core.rollout import (
+            describe_rollout,
+            is_staged,
+            release_status_for,
+            validate_rollout_track,
+        )
+
+        rollout_fraction = getattr(req, "rollout_fraction", None)
+        rollout_error = validate_rollout_track(rollout_fraction, track)
+        if rollout_error:
+            return OperationResult(
+                ok=False,
+                app_id=req.app_id,
+                platform=Platform.ANDROID,
+                message=rollout_error,
+                details={"track": track, "rollout_fraction": rollout_fraction},
+            )
+        staged = is_staged(rollout_fraction)
+        upload_status = release_status_for(rollout_fraction)
 
         # 版本说明必须在「上传大文件之前」校验完，避免传完 200MB 才失败
         release_notes, notes_error, notes_source = self.resolve_release_notes(
@@ -455,7 +495,8 @@ class GoogleStoreClient(StoreClient):
                 track=track,
                 version_code=version_code,
                 release_notes=release_notes,
-                release_status="completed",
+                release_status=upload_status,
+                user_fraction=rollout_fraction if staged else None,
             )
             commit = service.edits().commit(
                 packageName=package_name,
@@ -485,6 +526,18 @@ class GoogleStoreClient(StoreClient):
             elif notes_source is None:
                 notes_note = "（未提供版本说明，商店不会展示「新版本亮点」）"
 
+            if staged:
+                rollout_note = (
+                    f"已按 {describe_rollout(rollout_fraction)} 放量（{where}）。"
+                    f"确认稳定后可续推，例如：\n"
+                    f"  python cli.py release --app-id {req.app_id} "
+                    f"--platform android --version-code {version_code} "
+                    f"--track production --rollout 50 --allow-production\n"
+                    f"全量则用 --rollout 100。"
+                )
+            else:
+                rollout_note = f"请到 {where} 查看。"
+
             return OperationResult(
                 ok=True,
                 app_id=req.app_id,
@@ -493,7 +546,7 @@ class GoogleStoreClient(StoreClient):
                 message=(
                     f"已上传并发布到 `{track}`，versionCode={version_code}。"
                     f"{notes_note}"
-                    f"请到 {where} 查看。"
+                    f"{rollout_note}"
                 ),
                 details={
                     "package_name": package_name,
@@ -503,6 +556,9 @@ class GoogleStoreClient(StoreClient):
                     "artifact": str(aab_path),
                     "release_notes": release_notes,
                     "release_notes_source": notes_source,
+                    "rollout": describe_rollout(rollout_fraction),
+                    "rollout_fraction": rollout_fraction,
+                    "user_fraction": rollout_fraction if staged else None,
                     "track_response": track_resp,
                     "commit": commit,
                 },
@@ -564,6 +620,35 @@ class GoogleStoreClient(StoreClient):
                 message=str(exc),
             )
 
+        # 分阶段发布校验（在建 edit 之前）
+        from app.core.rollout import (
+            compare_rollout,
+            describe_rollout,
+            is_staged,
+            release_status_for,
+            validate_rollout_track,
+        )
+
+        rollout_specified = getattr(req, "rollout_fraction", None) is not None
+        rollout_fraction = getattr(req, "rollout_fraction", None)
+        rollout_error = validate_rollout_track(rollout_fraction, track)
+        if rollout_error:
+            return OperationResult(
+                ok=False,
+                app_id=req.app_id,
+                platform=Platform.ANDROID,
+                message=rollout_error,
+                details={"track": track, "rollout_fraction": rollout_fraction},
+            )
+        staged = is_staged(rollout_fraction)
+        # 分了批就由 rollout 决定 status；没传 rollout 时沿用 release_status
+        if staged:
+            desired_status = "inprogress"
+        elif rollout_specified and rollout_fraction is not None and rollout_fraction >= 1:
+            desired_status = "completed"
+        else:
+            desired_status = (req.release_status or "completed").strip().lower()
+
         # 版本说明校验放在建 edit / 写入之前，避免正式版发不出去或写错文案
         release_notes, notes_error, notes_source = self.resolve_release_notes(
             req, app_cfg, track=track
@@ -595,37 +680,68 @@ class GoogleStoreClient(StoreClient):
                 .list(packageName=package_name, editId=edit_id)
                 .execute(num_retries=3)
             )
-            desired_status = (req.release_status or "completed").strip().lower()
             primary = primary_release_on_track(tracks, track)
             if primary:
                 codes = [str(c) for c in (primary.get("versionCodes") or [])]
                 current_status = (primary.get("status") or "").lower()
-                already_same = (
-                    str(version_code) in codes and current_status == desired_status
-                )
-                if already_same:
+                current_fraction = primary.get("userFraction")
+                same_version = str(version_code) in codes
+
+                # 判定是否属于「无效 / 不被 Play 允许的推进」：
+                #   1. 已是全面发布(completed)，想退回分批(inProgress)
+                #      -> Play 只允许百分比递增，100% 是终态，直接拦下
+                #   2. 同在分批中，但放量没变大（相等或缩量）-> 无意义
+                #   3. 状态完全相同（如都已 completed）-> 无意义
+                # 其余（分批->全量、halted->重新放量等）都放行。
+                skip_reason = None
+                skip_hint = None
+                if same_version:
+                    if current_status == "completed" and desired_status == "inprogress":
+                        skip_reason = "already_full_no_downgrade"
+                        skip_hint = (
+                            "该版本已是全面发布（100%），Google 不允许倒退回分批发布，"
+                            "已放量的用户也无法回收。若确实需要分批，"
+                            "请上传更高 versionCode，并在**提审时就带 --rollout**。"
+                        )
+                    elif desired_status == current_status == "inprogress":
+                        if compare_rollout(current_fraction, rollout_fraction) <= 0:
+                            skip_reason = "fraction_not_increased"
+                            skip_hint = (
+                                f"当前已放量 {describe_rollout(None if current_fraction is None else float(current_fraction))}，"
+                                f"请传更大的 --rollout（例如当前 10%，续推用 --rollout 20；全量用 --rollout 100）。"
+                            )
+                    elif current_status == desired_status:
+                        skip_reason = "already_on_track"
+                        skip_hint = "若需真正送审，请上传更高 versionCode 的新 AAB。"
+
+                if skip_reason:
                     service.edits().delete(
                         packageName=package_name, editId=edit_id
                     ).execute(num_retries=2)
                     edit_id = None
+                    cur_desc = describe_rollout(
+                        None if current_fraction is None else float(current_fraction)
+                    )
                     return OperationResult(
                         ok=False,
                         app_id=req.app_id,
                         platform=Platform.ANDROID,
                         message=(
                             f"release 已跳过（防呆）：versionCode={version_code} "
-                            f"已在轨道 `{track}` 上（status={current_status}）。"
-                            f"再次推进不会产生新的 Google 审核或「提交活动」记录。"
-                            f"若需真正送审，请上传更高 versionCode 的新 AAB。"
+                            f"已在轨道 `{track}` 上（status={current_status}，{cur_desc}）。"
+                            f"该操作不会产生新的 Google 审核或「提交活动」记录。"
+                            f"{skip_hint}"
                         ),
                         details={
                             "skipped": True,
-                            "reason": "already_on_track",
+                            "reason": skip_reason,
                             "package_name": package_name,
                             "track": track,
                             "version_code": str(version_code),
                             "current_status": current_status,
+                            "current_user_fraction": current_fraction,
                             "desired_status": desired_status,
+                            "desired_user_fraction": rollout_fraction,
                             "primary_release": primary,
                         },
                     )
@@ -637,7 +753,8 @@ class GoogleStoreClient(StoreClient):
                 track=track,
                 version_code=version_code,
                 release_notes=release_notes,
-                release_status=req.release_status or "completed",
+                release_status=desired_status,
+                user_fraction=rollout_fraction if staged else None,
             )
             commit = service.edits().commit(
                 packageName=package_name,
@@ -645,8 +762,8 @@ class GoogleStoreClient(StoreClient):
             ).execute(num_retries=3)
             edit_id = None
 
-            review_state = _map_release_status(req.release_status or "completed", track)
-            if track == "production" and (req.release_status or "completed") == "completed":
+            review_state = _map_release_status(desired_status, track)
+            if track == "production" and desired_status == "completed":
                 review_state = ReviewState.WAITING_FOR_REVIEW
 
             notes_note = ""
@@ -655,6 +772,16 @@ class GoogleStoreClient(StoreClient):
 
                 notes_note = f"版本说明使用默认文案：{resolve_default_text(app_cfg)}。"
 
+            if staged:
+                tail = (
+                    f"已按 {describe_rollout(rollout_fraction)} 放量。"
+                    f"确认稳定后续推：`--rollout 50`；全量：`--rollout 100`。"
+                )
+            elif track == "production":
+                tail = "正式版可能进入 Google 审核，请用 status/watch 跟踪。"
+            else:
+                tail = "测试轨道一般无需商店人工审核。"
+
             return OperationResult(
                 ok=True,
                 app_id=req.app_id,
@@ -662,19 +789,18 @@ class GoogleStoreClient(StoreClient):
                 review_state=review_state,
                 message=(
                     f"已将 versionCode={version_code} 发布到 `{track}` "
-                    f"(status={req.release_status or 'completed'})。"
+                    f"(status={desired_status})。"
                     f"{notes_note}"
-                    + (
-                        "正式版可能进入 Google 审核，请用 status/watch 跟踪。"
-                        if track == "production"
-                        else "测试轨道一般无需商店人工审核。"
-                    )
+                    f"{tail}"
                 ),
                 details={
                     "package_name": package_name,
                     "track": track,
                     "version_code": str(version_code),
-                    "release_status": req.release_status or "completed",
+                    "release_status": desired_status,
+                    "rollout": describe_rollout(rollout_fraction),
+                    "rollout_fraction": rollout_fraction,
+                    "user_fraction": rollout_fraction if staged else None,
                     "release_notes": release_notes,
                     "release_notes_source": notes_source,
                     "track_response": track_resp,

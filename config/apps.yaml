@@ -34,7 +34,7 @@ apps:
       # 版本说明语言（须与 Play 商店支持的本地化语言一致）
       release_notes_locales: ["en-US"]
       # 运营手工上传时使用的默认文案（可由 CLI 的 --whats-new 覆盖）
-      release_notes_default: "-General: Bug fixes and system optimizations."
+      release_notes_default: "- General: Bug fixes and system optimizations."
       # 对应 client_email: play-publisher@sd-gcp-2026-7-15.iam.gserviceaccount.com
       service_account_json: secrets/google-play-sa-blurams-easelife.json
       artifact_url: ""
@@ -59,7 +59,7 @@ apps:
       package_name: com.vitec.easelifeEn
       track: internal
       release_notes_locales: ["en-US"]
-      release_notes_default: "-General: Bug fixes and system optimizations."
+      release_notes_default: "- General: Bug fixes and system optimizations."
       service_account_json: secrets/google-play-sa-blurams-easelife.json
       artifact_url: ""
       artifact_path: ""
@@ -86,7 +86,7 @@ apps:
       package_name: com.boykeep.ipc1
       track: internal
       release_notes_locales: ["en-US"]
-      release_notes_default: "-General: Bug fixes and system optimizations."
+      release_notes_default: "- General: Bug fixes and system optimizations."
       # 独立 Play Console / GCP boykeep-f3983
       service_account_json: secrets/google-play-sa-boykeep.json
       artifact_url: ""

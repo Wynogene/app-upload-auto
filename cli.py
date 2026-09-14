@@ -7,6 +7,7 @@ import click
 from loguru import logger
 
 from app.config import apply_proxy_env, get_settings
+from app.core.rollout import RolloutSpecError, parse_rollout_percent
 from app.core.service import AppReleaseService
 from app.core.watch_targets import (
     CONSOLE_HINT,
@@ -30,6 +31,14 @@ def _platform(value: str) -> Platform:
     if value == "android":
         return Platform.ANDROID
     raise click.BadParameter("platform 仅支持 ios / android")
+
+
+def _rollout_callback(ctx, param, value):
+    """把 `--rollout 10` 这种百分比解析成 0~1 的小数比例。"""
+    try:
+        return parse_rollout_percent(value)
+    except RolloutSpecError as exc:
+        raise click.BadParameter(str(exc)) from exc
 
 
 def _split_notes(values: tuple[str, ...]) -> tuple[str | None, dict[str, str] | None]:
@@ -100,6 +109,12 @@ def cli() -> None:
     default=False,
     help="允许发到正式版轨道（有线上风险，需显式确认）",
 )
+@click.option(
+    "--rollout",
+    default=None,
+    callback=_rollout_callback,
+    help="分阶段发布百分比（仅 production）。如 --rollout 10 表示先放量 10%；100 表示全量。",
+)
 @click.option("--notify/--no-notify", default=True)
 def upload_cmd(
     app_id: str,
@@ -109,6 +124,7 @@ def upload_cmd(
     track: str | None,
     whats_new: tuple[str, ...],
     allow_production: bool,
+    rollout: float | None,
     notify: bool,
 ) -> None:
     """上传并发布到指定轨道（Android 默认 internal）。"""
@@ -125,6 +141,7 @@ def upload_cmd(
         whats_new=plain,
         release_notes=scoped,
         allow_production=allow_production,
+        rollout_fraction=rollout,
     )
     result = service.upload(req)
     click.echo(json.dumps(result.model_dump(), ensure_ascii=False, indent=2))
@@ -154,6 +171,12 @@ def upload_cmd(
     help="completed=发布/送审；draft=草稿不对外",
 )
 @click.option("--allow-production", is_flag=True, default=False)
+@click.option(
+    "--rollout",
+    default=None,
+    callback=_rollout_callback,
+    help="分阶段发布百分比（仅 production）。如 --rollout 20 表示续推到 20%；100 表示转全量。",
+)
 @click.option("--notify/--no-notify", default=True)
 def release_cmd(
     app_id: str,
@@ -163,6 +186,7 @@ def release_cmd(
     whats_new: tuple[str, ...],
     release_status: str,
     allow_production: bool,
+    rollout: float | None,
     notify: bool,
 ) -> None:
     """将已上传版本推进到指定轨道（Android 发布/提审）。"""
@@ -170,6 +194,11 @@ def release_cmd(
         raise click.ClickException("正式版请同时加 --allow-production")
     if _platform(platform) == Platform.ANDROID and not version_code:
         raise click.ClickException("Android release 需要 --version-code")
+    if rollout is not None and release_status != "completed":
+        raise click.ClickException(
+            "`--rollout` 与 `--release-status` 不能同时指定"
+            f"（当前 release-status={release_status}）。分批发布请只用 --rollout。"
+        )
     plain, scoped = _split_notes(whats_new)
     service = AppReleaseService()
     req = SubmitRequest(
@@ -181,6 +210,7 @@ def release_cmd(
         release_notes=scoped,
         release_status=release_status,
         allow_production=allow_production,
+        rollout_fraction=rollout,
     )
     result = service.submit(req)
     click.echo(json.dumps(result.model_dump(), ensure_ascii=False, indent=2))
@@ -205,6 +235,12 @@ def release_cmd(
     help="版本说明。可纯文本，或 `zh-CN=文本`；多次传入即多语言。正式版必填。",
 )
 @click.option("--allow-production", is_flag=True, default=False)
+@click.option(
+    "--rollout",
+    default=None,
+    callback=_rollout_callback,
+    help="分阶段发布百分比（仅 production）。如 --rollout 10 表示先放量 10%；100 表示全量。",
+)
 @click.option("--notify/--no-notify", default=True, help="是否推送飞书")
 def upload_submit(
     app_id: str,
@@ -214,6 +250,7 @@ def upload_submit(
     track: str | None,
     whats_new: tuple[str, ...],
     allow_production: bool,
+    rollout: float | None,
     notify: bool,
 ) -> None:
     """Android：上传并发布到轨道；iOS：上传后再 submit（当前仍为骨架）。"""
@@ -230,6 +267,7 @@ def upload_submit(
         whats_new=plain,
         release_notes=scoped,
         allow_production=allow_production,
+        rollout_fraction=rollout,
     )
     results = service.upload_and_submit(req)
     click.echo(json.dumps([r.model_dump() for r in results], ensure_ascii=False, indent=2))
