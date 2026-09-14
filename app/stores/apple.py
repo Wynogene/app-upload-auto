@@ -1,0 +1,622 @@
+"""App Store Connect adapter (skeleton).
+
+Auth: JWT (ES256) with Key ID + Issuer ID + .p8
+Upload: Build Upload API and/or remote Mac runner (altool) — see TODOs.
+Submit / status: App Store Connect REST API.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+import httpx
+import jwt
+from loguru import logger
+
+from app.config import ROOT_DIR, get_settings, resolve_apple_token_sub
+from app.core.versions import is_version_greater
+from app.models import (
+    OperationResult,
+    Platform,
+    ReviewState,
+    ReviewStatus,
+    SubmitRequest,
+    UploadRequest,
+)
+from app.stores.apple_states import (
+    describe_build_processing_state,
+    describe_version_state,
+    map_version_state,
+    pick_version_state,
+)
+from app.stores.base import StoreClient
+
+ASC_BASE = "https://api.appstoreconnect.apple.com"
+
+# /v1/apps/{id} 的 relationships 字段有上百行链接，对排查状态毫无用处，只留关键属性
+_APP_KEEP_KEYS = ("name", "bundleId", "sku", "primaryLocale")
+
+
+@dataclass(frozen=True)
+class AppleCred:
+    """一套 App Store Connect 凭据（一个 Apple 开发者团队一套）。"""
+
+    key_id: str
+    issuer_id: str
+    key_path: Path
+    token_sub: str | None = None
+    source: str = "env"  # env=来自 .env 全局；app=来自 apps.yaml 的 ios.*
+
+
+def resolve_apple_cred(app_cfg: dict | None = None) -> AppleCred:
+    """按 App 解析 ASC 凭据，未配置则回退到 .env 的全局凭据。
+
+    与 Android 的 `android.service_account_json` 对称：因为 App Store Connect 的
+    API 密钥是**按 Apple 开发者团队隔离**的，不同公司主体（不同团队）必须各用各的
+    Key ID / Issuer ID / .p8。
+    """
+    settings = get_settings()
+    ios = (app_cfg or {}).get("ios") or {}
+
+    raw_path = ios.get("private_key_path") or settings.apple_private_key_path
+    key_path = Path(raw_path)
+    if not key_path.is_absolute():
+        key_path = ROOT_DIR / key_path
+
+    key_id = ios.get("key_id") or settings.apple_key_id
+    issuer_id = ios.get("issuer_id") or settings.apple_issuer_id
+    from_app = any(ios.get(k) for k in ("key_id", "issuer_id", "private_key_path"))
+
+    return AppleCred(
+        key_id=key_id,
+        issuer_id=issuer_id,
+        key_path=key_path,
+        token_sub=resolve_apple_token_sub(key_path, ios.get("token_sub")),
+        source="app" if from_app else "env",
+    )
+
+
+def _compact_app(payload: dict) -> dict:
+    """把 /v1/apps/{id} 的响应压成可读的几行。"""
+    data = (payload or {}).get("data") or {}
+    attrs = data.get("attributes") or {}
+    return {
+        "asc_app_id": data.get("id"),
+        **{k: attrs.get(k) for k in _APP_KEEP_KEYS},
+    }
+
+
+class AppleStoreClient(StoreClient):
+    platform = Platform.IOS
+
+    def _cred(self, app_cfg: dict | None = None) -> AppleCred:
+        return resolve_apple_cred(app_cfg)
+
+    def _token(self, app_cfg: dict | None = None) -> str:
+        cred = self._cred(app_cfg)
+        if not cred.key_id or not cred.issuer_id:
+            raise RuntimeError(
+                "未配置 Apple 凭据：请在 .env 设 APPLE_KEY_ID / APPLE_ISSUER_ID，"
+                "或在 apps.yaml 的 ios 下按 App 单独配置"
+            )
+        if not cred.key_path.exists():
+            raise RuntimeError(f"Apple 私钥不存在: {cred.key_path}")
+
+        private_key = cred.key_path.read_text(encoding="utf-8")
+        now = int(time.time())
+        payload = {
+            "iss": cred.issuer_id,
+            "iat": now,
+            "exp": now + 15 * 60,  # Apple 上限 20 分钟，留点余量
+            "aud": "appstoreconnect-v1",
+        }
+        # 个人密钥(ApiKey_*.p8)必须带 sub="user"，团队密钥(AuthKey_*.p8)不能带，
+        # 否则都会返回 401 NOT_AUTHORIZED。
+        if cred.token_sub:
+            payload["sub"] = cred.token_sub
+        headers = {"alg": "ES256", "kid": cred.key_id, "typ": "JWT"}
+        return jwt.encode(payload, private_key, algorithm="ES256", headers=headers)
+
+    def _client(self) -> httpx.Client:
+        """ASC 默认直连，不继承 HTTP(S)_PROXY 环境变量（可用 APPLE_USE_PROXY=true 打开）。"""
+        settings = get_settings()
+        return httpx.Client(timeout=30, trust_env=bool(settings.apple_use_proxy))
+
+    def _headers(self, app_cfg: dict | None = None) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self._token(app_cfg)}",
+            "Content-Type": "application/json",
+        }
+
+    def check_connectivity(self, app_cfg: dict | None = None) -> dict:
+        """自检：签名 JWT → 调 /v1/apps，返回可读的结论（不抛异常）。"""
+        settings = get_settings()
+        cred = self._cred(app_cfg)
+        info: dict = {
+            "app_id": (app_cfg or {}).get("id"),
+            "key_id": cred.key_id,
+            "issuer_id": cred.issuer_id,
+            "key_path": str(cred.key_path),
+            "key_required_sub": cred.token_sub,
+            "cred_source": cred.source,
+            "use_proxy": bool(settings.apple_use_proxy),
+        }
+        if not cred.key_id or not cred.issuer_id:
+            info.update(
+                ok=False,
+                message=(
+                    "未配置 Apple 凭据。.env 设 APPLE_KEY_ID / APPLE_ISSUER_ID，"
+                    "或在 config/apps.yaml 的该 App ios 下配置 key_id / issuer_id / private_key_path"
+                ),
+            )
+            return info
+        if not cred.key_path.exists():
+            info.update(ok=False, message=f".p8 文件不存在: {cred.key_path}")
+            return info
+
+        try:
+            token = self._token(app_cfg)
+        except Exception as exc:  # noqa: BLE001
+            info.update(ok=False, message=f"JWT 签名失败: {exc}")
+            return info
+
+        try:
+            with self._client() as client:
+                resp = client.get(
+                    f"{ASC_BASE}/v1/apps",
+                    params={"limit": 50},
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+        except Exception as exc:  # noqa: BLE001
+            info.update(ok=False, message=f"网络不可达: {exc}")
+            return info
+
+        if resp.status_code == 401:
+            info.update(
+                ok=False,
+                status_code=401,
+                message=(
+                    "401 NOT_AUTHORIZED：网络已通，但鉴权失败。"
+                    "常见原因：① 个人密钥缺 sub=\"user\"（或团队密钥误加 sub）"
+                    " ② Key ID / Issuer ID 与 .p8 不匹配 ③ 该密钥已被撤销或过期"
+                ),
+            )
+            return info
+        if resp.status_code >= 400:
+            info.update(
+                ok=False,
+                status_code=resp.status_code,
+                message=f"ASC 返回 HTTP {resp.status_code}",
+                raw=resp.text[:500],
+            )
+            return info
+
+        apps = resp.json().get("data", [])
+        listing = [
+            {
+                "asc_app_id": a.get("id"),
+                "bundle_id": (a.get("attributes") or {}).get("bundleId"),
+                "name": (a.get("attributes") or {}).get("name"),
+            }
+            for a in apps
+        ]
+        info.update(
+            ok=True,
+            status_code=resp.status_code,
+            apps=listing,
+            message=f"连通正常，可见 {len(apps)} 个 App",
+        )
+
+        # 额外校验：apps.yaml 里登记的目标 App 是否真在这把密钥的可见范围内。
+        # 不在的话，后续调用会得到 404（而不是 403），最容易被误判成「App 不存在」。
+        target = ((app_cfg or {}).get("ios") or {}).get("app_store_app_id")
+        if target:
+            visible_ids = {a["asc_app_id"] for a in listing}
+            info["target_app_store_app_id"] = str(target)
+            info["target_app_visible"] = str(target) in visible_ids
+            if not info["target_app_visible"]:
+                info["warning"] = (
+                    f"凭据本身有效，但 apps.yaml 登记的 app_store_app_id={target} "
+                    "不在这把密钥可见的 App 列表里。该 App 很可能属于**另一个 Apple 开发者团队**"
+                    "（API 密钥按团队隔离，Issuer ID 也是团队级），"
+                    "需在 config/apps.yaml 的该 App ios 下填该团队自己的 "
+                    "key_id / issuer_id / private_key_path。"
+                )
+                info["message"] += f"；但目标 App {target} 不在可见列表"
+        return info
+
+    def preflight_ipa(self, app_cfg: dict, ipa_path: str | Path) -> dict:
+        """上传前校验：解析 IPA + 拉取 ASC 现状 + 跑三道硬校验。
+
+        返回 {ok, meta, issues, message}；不抛异常（除了解析失败的友好错误）。
+        """
+        from app.stores.apple_preflight import (
+            check_ipa_preflight,
+            format_issues,
+            has_errors,
+        )
+        from app.stores.ipa_meta import IpaMeta, IpaParseError, parse_ipa_meta
+
+        ios = app_cfg.get("ios") or {}
+        out: dict = {"ok": False, "meta": None, "issues": [], "message": ""}
+
+        try:
+            meta: IpaMeta = parse_ipa_meta(ipa_path)
+        except IpaParseError as exc:
+            out["message"] = str(exc)
+            return out
+
+        out["meta"] = meta
+
+        # 收集 ASC 现状；拉取失败不阻断（退化为「只做本地能做的校验」）
+        latest_released: str | None = None
+        released_versions: set[str] = set()
+        existing_builds: set[str] = set()
+        version_strings: set[str] = set()
+        versions_in_review: set[str] = set()
+        notes: list[str] = []
+        try:
+            versions = self.list_versions(app_cfg, limit=50)
+            for v in versions:
+                vs = v.get("version_string")
+                if not vs:
+                    continue
+                version_strings.add(vs)
+                if v.get("mapped") == ReviewState.RELEASED.value:
+                    released_versions.add(vs)
+                    if latest_released is None or is_version_greater(vs, latest_released):
+                        latest_released = vs
+                if v.get("mapped") in {
+                    ReviewState.WAITING_FOR_REVIEW.value,
+                    ReviewState.IN_REVIEW.value,
+                }:
+                    versions_in_review.add(vs)
+            existing_builds = {
+                str(b.get("version")) for b in self.list_builds(app_cfg, limit=100) if b.get("version")
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("preflight: 拉取 ASC 现状失败, 降级为本地校验: {}", exc)
+            notes.append(f"未能读取 ASC 现状（{exc}），以下校验不含线上比对")
+
+        issues = check_ipa_preflight(
+            meta,
+            expected_bundle_id=ios.get("bundle_id"),
+            latest_released_version=latest_released,
+            released_versions=released_versions,
+            existing_build_versions=existing_builds,
+            version_strings=version_strings,
+            versions_in_review=versions_in_review,
+        )
+        out["issues"] = issues
+        out["latest_released_version"] = latest_released
+        out["existing_build_count"] = len(existing_builds)
+        out["ok"] = not has_errors(issues)
+        out["message"] = format_issues(issues) or "上传前校验通过"
+        for n in notes:
+            out["message"] += f"\n[提示] {n}"
+        return out
+
+    def upload(self, req: UploadRequest, app_cfg: dict) -> OperationResult:
+        """上传 IPA。
+
+        当前已完成：上传前校验（bundle id / 版本递增 / 构建号查重）。
+        待接入：ASC Build Upload API（POST /v1/buildUploads → 分片 PUT → PATCH uploaded）。
+        """
+        ios = app_cfg.get("ios") or {}
+        artifact = req.artifact_path or ios.get("artifact_path")
+        artifact_url = req.artifact_url or ios.get("artifact_url")
+        logger.info(
+            "apple.upload app={} artifact={} url={}",
+            req.app_id,
+            artifact,
+            artifact_url,
+        )
+        if not artifact and not artifact_url:
+            return OperationResult(
+                ok=False,
+                app_id=req.app_id,
+                platform=Platform.IOS,
+                message="未提供 IPA 路径或 artifact_url",
+            )
+
+        if not artifact:
+            return OperationResult(
+                ok=True,
+                app_id=req.app_id,
+                platform=Platform.IOS,
+                message=(
+                    "提供了 artifact_url 但未给本地 IPA，无法做上传前校验。"
+                    "建议先用 ipa-check 校验本地包。"
+                ),
+                details={"artifact_url": artifact_url},
+            )
+
+        pre = self.preflight_ipa(app_cfg, artifact)
+        meta = pre.get("meta")
+        base_details = {
+            "artifact": str(artifact),
+            "bundle_id": getattr(meta, "bundle_id", None),
+            "version_name": getattr(meta, "version_name", None),
+            "build_number": getattr(meta, "build_number", None),
+            "latest_released_version": pre.get("latest_released_version"),
+        }
+        if not pre.get("ok"):
+            return OperationResult(
+                ok=False,
+                app_id=req.app_id,
+                platform=Platform.IOS,
+                message=f"上传前校验未通过，已阻止上传：\n{pre.get('message')}",
+                details=base_details,
+            )
+
+        return OperationResult(
+            ok=True,
+            app_id=req.app_id,
+            platform=Platform.IOS,
+            message=(
+                "上传前校验通过。"
+                "（Build Upload API 尚未接入，下一步将真正上传到 TestFlight）\n"
+                f"{pre.get('message')}"
+            ),
+            details=base_details,
+        )
+
+    def submit(self, req: SubmitRequest, app_cfg: dict) -> OperationResult:
+        """Create review submission for an appStoreVersion.
+
+        Real flow (to implement):
+        - find/create appStoreVersions
+        - attach build
+        - set whatsNew localization
+        - POST reviewSubmissions + reviewSubmissionItems
+        - PATCH submitted=true
+        """
+        ios = app_cfg.get("ios") or {}
+        app_store_app_id = ios.get("app_store_app_id")
+        logger.info(
+            "apple.submit stub app={} asc_app_id={} version={}",
+            req.app_id,
+            app_store_app_id,
+            req.version_name,
+        )
+        if not app_store_app_id:
+            return OperationResult(
+                ok=False,
+                app_id=req.app_id,
+                platform=Platform.IOS,
+                message="apps.yaml 缺少 ios.app_store_app_id",
+            )
+        return OperationResult(
+            ok=True,
+            app_id=req.app_id,
+            platform=Platform.IOS,
+            review_state=ReviewState.WAITING_FOR_REVIEW,
+            message="iOS 提审骨架已就绪（待接入 reviewSubmissions API）",
+            details={"app_store_app_id": app_store_app_id},
+        )
+
+    def status(self, app_cfg: dict, version_name: str | None = None) -> ReviewStatus:
+        """Query latest version / review state via ASC API."""
+        ios = app_cfg.get("ios") or {}
+        app_store_app_id = ios.get("app_store_app_id")
+        if not app_store_app_id:
+            return ReviewStatus(
+                app_id=app_cfg.get("id", ""),
+                platform=Platform.IOS,
+                version_name=version_name,
+                state=ReviewState.UNKNOWN,
+                message="缺少 ios.app_store_app_id",
+            )
+
+        cred = self._cred(app_cfg)
+        if not (cred.key_id and cred.key_path.exists()):
+            return ReviewStatus(
+                app_id=app_cfg.get("id", ""),
+                platform=Platform.IOS,
+                version_name=version_name,
+                state=ReviewState.UNKNOWN,
+                message="iOS 凭据未配置（APPLE_KEY_ID / APPLE_PRIVATE_KEY_PATH）",
+            )
+
+        app_id = app_cfg.get("id", "")
+        try:
+            with self._client() as client:
+                headers = self._headers(app_cfg)
+                params = {
+                    "limit": 10,
+                    "fields[appStoreVersions]": (
+                        "versionString,appStoreState,appVersionState,createdDate,platform"
+                    ),
+                }
+                if version_name:
+                    params["filter[versionString]"] = version_name
+                resp = client.get(
+                    f"{ASC_BASE}/v1/apps/{app_store_app_id}/appStoreVersions",
+                    params=params,
+                    headers=headers,
+                )
+
+                if resp.status_code >= 400:
+                    hint = ""
+                    if resp.status_code == 404:
+                        hint = (
+                            "（该 App 可能属于另一个 Apple 开发者团队：API 密钥按团队隔离，"
+                            "需在 apps.yaml 的 ios 下配置该团队独立凭据）"
+                        )
+                    return ReviewStatus(
+                        app_id=app_id,
+                        platform=Platform.IOS,
+                        version_name=version_name,
+                        state=ReviewState.UNKNOWN,
+                        message=f"ASC 查询失败: HTTP {resp.status_code}{hint}",
+                        raw={"body": resp.text[:500]},
+                    )
+
+                versions = resp.json().get("data") or []
+                if not versions:
+                    scope = f"版本 {version_name}" if version_name else "任何版本"
+                    return ReviewStatus(
+                        app_id=app_id,
+                        platform=Platform.IOS,
+                        version_name=version_name,
+                        state=ReviewState.UNKNOWN,
+                        message=f"ASC 中未找到{scope}（可能尚未创建或还未上传构建版本）",
+                    )
+
+                # 该端点不支持 sort，改为按创建时间在本地取最新
+                versions.sort(
+                    key=lambda v: (v.get("attributes") or {}).get("createdDate") or "",
+                    reverse=True,
+                )
+                target = versions[0]
+                attrs = target.get("attributes") or {}
+                raw_state = pick_version_state(attrs)
+                vstr = attrs.get("versionString")
+                state = map_version_state(raw_state)
+                state_label = describe_version_state(raw_state)
+
+                build_info = self._fetch_version_build(
+                    client, target.get("id"), app_cfg, headers
+                )
+
+                msg = f"{vstr}：{state_label}"
+                if build_info:
+                    msg += (
+                        f"（构建 {build_info.get('version')}："
+                        f"{describe_build_processing_state(build_info.get('processingState'))}）"
+                    )
+                elif state == ReviewState.DRAFT:
+                    msg += "；该版本还没关联构建版本，需先上传 IPA"
+
+                if state == ReviewState.APPROVED and raw_state == "PENDING_DEVELOPER_RELEASE":
+                    msg += "。注意：这是「手动发布」模式，需你到 ASC 点发布才会对用户生效"
+
+                return ReviewStatus(
+                    app_id=app_id,
+                    platform=Platform.IOS,
+                    version_name=vstr,
+                    state=state,
+                    raw={
+                        "app_store_app_id": app_store_app_id,
+                        "version_string": vstr,
+                        "app_version_state": raw_state,
+                        "app_version_state_label": state_label,
+                        "build": build_info,
+                    },
+                    message=msg,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("apple.status error")
+            return ReviewStatus(
+                app_id=app_id,
+                platform=Platform.IOS,
+                version_name=version_name,
+                state=ReviewState.UNKNOWN,
+                message=f"status 异常: {exc}",
+            )
+
+    def _fetch_version_build(
+        self,
+        client: httpx.Client,
+        version_id: str | None,
+        app_cfg: dict,
+        headers: dict[str, str],
+    ) -> dict | None:
+        """取该 appStoreVersion 关联的构建；失败不影响主流程。"""
+        if not version_id:
+            return None
+        try:
+            resp = client.get(
+                f"{ASC_BASE}/v1/appStoreVersions/{version_id}/build",
+                params={"fields[builds]": "version,processingState,expired,uploadedDate"},
+                headers=headers,
+            )
+            if resp.status_code >= 400:
+                return None
+            data = (resp.json() or {}).get("data")
+            if not data:
+                return None
+            attrs = data.get("attributes") or {}
+            return {
+                "build_id": data.get("id"),
+                "version": attrs.get("version"),
+                "processingState": attrs.get("processingState"),
+                "expired": attrs.get("expired"),
+                "uploadedDate": attrs.get("uploadedDate"),
+            }
+        except Exception:  # noqa: BLE001
+            logger.debug("fetch version build failed version_id={}", version_id)
+            return None
+
+    def list_versions(self, app_cfg: dict, limit: int = 10) -> list[dict]:
+        """列出 ASC 中该 App 的版本（供防呆与排查使用）。"""
+        ios = app_cfg.get("ios") or {}
+        app_store_app_id = ios.get("app_store_app_id")
+        if not app_store_app_id:
+            return []
+        with self._client() as client:
+            resp = client.get(
+                f"{ASC_BASE}/v1/apps/{app_store_app_id}/appStoreVersions",
+                params={
+                    "limit": limit,
+                    "fields[appStoreVersions]": (
+                        "versionString,appStoreState,appVersionState,createdDate"
+                    ),
+                },
+                headers=self._headers(app_cfg),
+            )
+            if resp.status_code >= 400:
+                return []
+            out = []
+            for v in resp.json().get("data") or []:
+                a = v.get("attributes") or {}
+                raw_state = pick_version_state(a)
+                out.append(
+                    {
+                        "version_string": a.get("versionString"),
+                        "state": raw_state,
+                        "state_label": describe_version_state(raw_state),
+                        "mapped": map_version_state(raw_state).value,
+                        "created_date": a.get("createdDate"),
+                    }
+                )
+            out.sort(key=lambda x: x.get("created_date") or "", reverse=True)
+            return out
+
+    def list_builds(self, app_cfg: dict, limit: int = 20) -> list[dict]:
+        """列出该 App 已有的构建（上传前查重使用）。"""
+        ios = app_cfg.get("ios") or {}
+        app_store_app_id = ios.get("app_store_app_id")
+        if not app_store_app_id:
+            return []
+        with self._client() as client:
+            resp = client.get(
+                f"{ASC_BASE}/v1/builds",
+                params={
+                    "filter[app]": app_store_app_id,
+                    "limit": limit,
+                    "sort": "-uploadedDate",
+                    "fields[builds]": (
+                        "version,processingState,expired,uploadedDate,"
+                        "usesNonExemptEncryption"
+                    ),
+                },
+                headers=self._headers(app_cfg),
+            )
+            if resp.status_code >= 400:
+                return []
+            out = []
+            for b in resp.json().get("data") or []:
+                a = b.get("attributes") or {}
+                out.append(
+                    {
+                        "build_id": b.get("id"),
+                        "version": a.get("version"),
+                        "processing_state": a.get("processingState"),
+                        "expired": a.get("expired"),
+                        "uploaded_date": a.get("uploadedDate"),
+                    }
+                )
+            return out

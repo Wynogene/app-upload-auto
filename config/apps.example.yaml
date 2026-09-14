@@ -1,0 +1,24 @@
+apps:
+  # 个人调试：notify_chat_id 留空（会被 SAFETY_PERSONAL_ONLY 忽略）
+  - id: blurams
+    name: Blurams
+    notify_chat_id: ""
+    allowed_open_ids: []  # personal-only 时以 FEISHU_OWNER_OPEN_ID 为准
+    ios:
+      enabled: true
+      bundle_id: com.example.app
+      app_store_app_id: ""
+      artifact_url: ""
+      artifact_path: ""
+    android:
+      enabled: true
+      package_name: com.example.app
+      track: internal
+      artifact_url: ""
+      artifact_path: ""
+
+schedule:
+  # 个人调试建议先关；确认只私聊本人后再在 .env 开 SCHEDULE_ENABLED=true
+  # 详见 docs/SCHEDULE_WATCH.md
+  poll_review_status: false
+  interval_minutes: 30

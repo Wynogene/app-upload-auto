@@ -1,0 +1,117 @@
+# Play / Apple 账号关系：
+# - blurams + easelife：同一公司主体 → 同一 Play Console + 同一 Apple 开发者团队（共用 .env 全局凭据）
+# - boykeep：独立公司主体 → 独立 Play Console + 独立 GCP + 独立 Apple 团队（见 docs/BOYKEEP_ANDROID_SETUP.md、docs/IOS_ASC_SETUP.md）
+# - 安欣看：国内且不再投入，已禁用
+#
+# 版本说明（releaseNotes）：
+# - API 中是可选字段。省略 = 商店不展示版本说明。
+# - 优先用运营在 apps.yaml / .env 配置的「默认文案」（运营手工上传时用的那条），
+#   而不是工具临时编造。
+# - 正式轨道 production 若既没传 --whats-new、也没配默认文案，则会被拦下。
+# - 多语言：--whats-new zh-CN=... --whats-new en-US=...
+# - android.release_notes_locales 决定「纯文本」套用到哪些语言，须与商店支持的本地化语言一致。
+
+apps:
+  - id: blurams
+    name: Blurams
+    notify_chat_id: ""
+    allowed_open_ids: []
+    play_console_account: shared_blurams_easelife
+    ios:
+      enabled: true
+      bundle_id: com.blurams.ipc
+      app_store_app_id: "1445991661"
+      # 凭据留空 = 用 .env 的全局 APPLE_KEY_ID / APPLE_ISSUER_ID / APPLE_PRIVATE_KEY_PATH
+      key_id: ""
+      issuer_id: ""
+      private_key_path: ""
+      artifact_url: ""
+      artifact_path: ""
+    android:
+      enabled: true
+      package_name: com.blurams.ipc
+      track: internal
+      # 版本说明语言（须与 Play 商店支持的本地化语言一致）
+      release_notes_locales: ["en-US"]
+      # 运营手工上传时使用的默认文案（可由 CLI 的 --whats-new 覆盖）
+      release_notes_default: "-General: Bug fixes and system optimizations."
+      # 对应 client_email: play-publisher@sd-gcp-2026-7-15.iam.gserviceaccount.com
+      service_account_json: secrets/google-play-sa-blurams-easelife.json
+      artifact_url: ""
+      artifact_path: ""
+
+  - id: easelife
+    name: EaseLife
+    notify_chat_id: ""
+    allowed_open_ids: []
+    play_console_account: shared_blurams_easelife
+    ios:
+      enabled: true
+      bundle_id: com.vitec.easelifeEn
+      app_store_app_id: "1588050679"
+      key_id: ""
+      issuer_id: ""
+      private_key_path: ""
+      artifact_url: ""
+      artifact_path: ""
+    android:
+      enabled: true
+      package_name: com.vitec.easelifeEn
+      track: internal
+      release_notes_locales: ["en-US"]
+      release_notes_default: "-General: Bug fixes and system optimizations."
+      service_account_json: secrets/google-play-sa-blurams-easelife.json
+      artifact_url: ""
+      artifact_path: ""
+
+  - id: boykeep
+    name: Boykeep
+    notify_chat_id: ""
+    allowed_open_ids: []
+    play_console_account: boykeep_separate
+    ios:
+      enabled: true
+      bundle_id: com.boykeep.ipc1
+      # 已确认 boykeep 属于「另一个 Apple 开发者团队」（与 blurams/easelife 不同主体）。
+      # 当前 app_store_app_id 需要用 blurams 团队密钥查不到（404），请在 boykeep 主体下
+      # 重新核对 Apple ID，并在下三行填入该团队自己的凭据（详见 docs/IOS_ASC_SETUP.md）。
+      app_store_app_id: "6472993326"
+      key_id: ""
+      issuer_id: ""
+      private_key_path: ""
+      artifact_url: ""
+      artifact_path: ""
+    android:
+      enabled: true
+      package_name: com.boykeep.ipc1
+      track: internal
+      release_notes_locales: ["en-US"]
+      release_notes_default: "-General: Bug fixes and system optimizations."
+      # 独立 Play Console / GCP boykeep-f3983
+      service_account_json: secrets/google-play-sa-boykeep.json
+      artifact_url: ""
+      artifact_path: ""
+
+  - id: anxinkan
+    name: 安欣看
+    notify_chat_id: ""
+    allowed_open_ids: []
+    play_console_account: ignored_cn_only
+    ios:
+      enabled: false
+      bundle_id: com.vitec.easelife
+      app_store_app_id: ""
+      artifact_url: ""
+      artifact_path: ""
+    android:
+      enabled: false
+      package_name: com.vitec.easelife
+      track: internal
+      service_account_json: ""
+      artifact_url: ""
+      artifact_path: ""
+
+# 常驻盯盘：需同时 SCHEDULE_ENABLED=true + poll_review_status: true，见 docs/SCHEDULE_WATCH.md
+schedule:
+  poll_review_status: false
+  interval_minutes: 30
