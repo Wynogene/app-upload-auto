@@ -120,9 +120,9 @@ def approval_notify_title(
 
     reviewing = {ReviewState.IN_REVIEW.value, ReviewState.WAITING_FOR_REVIEW.value}
 
-    # 自管式：过审但不对用户开放
+    # 自管式：过审但不对用户开放（无 message 标记时的兜底标题）
     if prev in reviewing and cur == ReviewState.APPROVED.value:
-        return "审核已通过（自管式：尚未对用户开放）"
+        return "审核已通过（尚未对用户开放）"
 
     # 自管式关闭：过审并自动上架；或自管式解除后点了发布
     if cur == ReviewState.RELEASED.value:

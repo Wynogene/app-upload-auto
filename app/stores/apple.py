@@ -30,6 +30,7 @@ from app.stores.apple_states import (
     describe_version_state,
     map_version_state,
     pick_version_state,
+    build_processing_stuck_note,
 )
 from app.stores.base import StoreClient
 
@@ -501,6 +502,12 @@ class AppleStoreClient(StoreClient):
                         f"；构建 {build_info.get('version')}："
                         f"{describe_build_processing_state(build_info.get('processingState'))}"
                     )
+                    stuck = build_processing_stuck_note(
+                        build_info.get("processingState"),
+                        build_info.get("uploadedDate"),
+                    )
+                    if stuck:
+                        msg += f"；{stuck}"
                 elif state == ReviewState.DRAFT:
                     msg += "；该版本还没关联构建版本，需先上传 IPA"
 

@@ -40,6 +40,9 @@ _VERSION_STATE_MAP: dict[str, ReviewState] = {
     # 已下架 / 被新版本取代
     "REMOVED_FROM_SALE": ReviewState.HALTED,
     "REPLACED_WITH_NEW_VERSION": ReviewState.HALTED,
+    # 合规 / 合同：上架前阻塞（只读盯盘用）
+    "WAITING_FOR_EXPORT_COMPLIANCE": ReviewState.WAITING_FOR_REVIEW,
+    "PENDING_CONTRACT": ReviewState.WAITING_FOR_REVIEW,
 }
 
 # 供提示语使用的中文说明
@@ -82,6 +85,53 @@ _BUILD_STATE_LABEL: dict[str, str] = {
 
 # 上传后 build 有可能长时间停在 PROCESSING，超过这个时长值得提醒人工介入
 BUILD_PROCESSING_HINT = "build 长期停在 Apple 处理中，请到 ASC → TestFlight 查看具体报错"
+# 盯盘：PROCESSING 超过该小时数后写入指纹，触发一次「超时」通知（只读，不写 ASC）
+BUILD_PROCESSING_STUCK_HOURS = 2.0
+
+
+def build_uploaded_age_hours(
+    uploaded_date: str | None,
+    *,
+    now_ts: float | None = None,
+) -> float | None:
+    """解析 ASC uploadedDate（ISO8601）距今小时数；无法解析则 None。"""
+    if not uploaded_date:
+        return None
+    from datetime import datetime, timezone
+
+    text = str(uploaded_date).strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    import time as _time
+
+    now = datetime.fromtimestamp(
+        now_ts if now_ts is not None else _time.time(),
+        tz=timezone.utc,
+    )
+    return max(0.0, (now - dt).total_seconds() / 3600.0)
+
+
+def build_processing_stuck_note(
+    processing_state: str | None,
+    uploaded_date: str | None,
+    *,
+    threshold_hours: float = BUILD_PROCESSING_STUCK_HOURS,
+    now_ts: float | None = None,
+) -> str | None:
+    """若仍在 PROCESSING 且超过阈值，返回可写入 status message 的提示句。"""
+    if (processing_state or "").upper() != "PROCESSING":
+        return None
+    hours = build_uploaded_age_hours(uploaded_date, now_ts=now_ts)
+    if hours is None or hours < threshold_hours:
+        return None
+    return (
+        f"构建处理超时提示：已约{hours:.0f}小时仍在 PROCESSING，"
+        f"请到 ASC → TestFlight 查看"
+    )
 
 
 def pick_version_state(attrs: dict) -> str | None:

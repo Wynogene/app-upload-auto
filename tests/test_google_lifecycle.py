@@ -85,7 +85,7 @@ class TestApprovalNotifyTitle:
         title = approval_notify_title(ReviewState.IN_REVIEW, ReviewState.APPROVED)
         assert title is not None
         assert "过审" in title or "通过" in title
-        assert "尚未对用户开放" in title or "自管" in title
+        assert "尚未对用户开放" in title
 
     def test_managed_off_auto_publish(self):
         # 自管式关闭：过审并自动上架
