@@ -59,29 +59,52 @@ class Notifier:
         statuses: list[ReviewStatus],
         title: str = "审核状态更新",
         footer: str | None = None,
+        *,
+        ops_copy: bool = True,
+        title_prefix: str | None = None,
     ) -> dict | None:
-        from app.core.watch_targets import console_hints_for
+        """发送审核/发布状态。
 
+        ops_copy=True（默认）：运营向摘要，不堆 API 原文，也不再重复长 footer。
+        footer 仅在 ops_copy=False 时作为附加段；ops 模式下忽略传入的长 CONSOLE_HINT，
+        避免与 message 内提示重复。
+        """
         if not statuses:
             return None
-        # personal-only：合并成一条，只发给本人，避免按 app 误路由到群
         id_type, receive_id = self._target(statuses[0].app_id if statuses else None)
-        lines = []
-        for s in statuses:
-            lines.append(
-                f"- **{s.app_id}** / **{s.platform.value}** `{s.version_name or '-'}` → `{s.state.value}`\n  {s.message}"
-            )
-        if footer is not None:
-            hint = footer
+
+        if ops_copy:
+            from app.core.notify_copy import format_review_statuses_ops
+
+            markdown = format_review_statuses_ops(statuses)
         else:
-            hint = console_hints_for([s.platform.value for s in statuses])
-        if hint:
-            lines.append(f"\n_{hint}_")
+            from app.core.watch_targets import console_hints_for
+
+            lines = []
+            for s in statuses:
+                lines.append(
+                    f"- **{s.app_id}** / **{s.platform.value}** "
+                    f"`{s.version_name or '-'}` → `{s.state.value}`\n  {s.message}"
+                )
+            hint = (
+                footer
+                if footer is not None
+                else console_hints_for([s.platform.value for s in statuses])
+            )
+            if hint:
+                lines.append(f"\n_{hint}_")
+            markdown = "\n".join(lines)
+
+        if title_prefix is None:
+            # 默认运营向标题；个人模式也不再强制「个人调试」前缀，避免误导样例
+            title_prefix = "发版助手 · "
+        full_title = f"{title_prefix}{title}" if title_prefix else title
+
         return self.client.send_interactive(
             receive_id=receive_id,
             receive_id_type=id_type,
-            title=f"[个人调试] {title}",
-            markdown="\n".join(lines),
+            title=full_title,
+            markdown=markdown,
             buttons=None,
             template="orange",
         )

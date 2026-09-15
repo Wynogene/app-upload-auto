@@ -25,6 +25,9 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $OutLog = Join-Path $LogDir "serve-watch.out.log"
 $ErrLog = Join-Path $LogDir "serve-watch.err.log"
 
+# 停进程时会禁用巡检；这里拉起 serve 后重新启用（任务存在才生效）
+Enable-ScheduledTask -TaskName "AppUploadAuto-ServeHealth" -ErrorAction SilentlyContinue | Out-Null
+
 # 已在跑则不重复拉起
 $existing = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -and ($_.CommandLine -match 'cli\.py serve') }

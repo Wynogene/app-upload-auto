@@ -11,15 +11,18 @@
 ```powershell
 cd f:\app-upload-auto
 
-# 查一次：挂了则拉起；加 -NotifyIfDown 则私聊你（不进群）
+# 查一次 / 手动巡检（PowerShell；计划任务已改用 pythonw，不再弹窗）
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\check-serve-watch.ps1 -NotifyIfDown
 
-# 安装每 15 分钟巡检的计划任务（当前用户）
+# 安装每 15 分钟巡检（pythonw.exe，无控制台窗口）
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\install-serve-healthcheck.ps1
 ```
 
-任务名：`AppUploadAuto-ServeHealth`  
-卸载：`powershell -File .\scripts\windows\uninstall-serve-healthcheck.ps1`
+任务名：`AppUploadAuto-ServeHealth`（由 **pythonw** 执行，不应再闪前台 PowerShell）。  
+卸载：`powershell -File .\scripts\windows\uninstall-serve-healthcheck.ps1`  
+或随开机自启一起卸：`uninstall-autostart.ps1`。
+
+`stop-serve-watch.ps1` 会禁用该巡检，避免停进程后又被拉起；`start-serve-watch.ps1` 会重新启用。
 
 与登录自启 `AppUploadAuto-ServeWatch` 互补：自启管「登录后拉起」，健康检查管「中途挂了再拉」。
 

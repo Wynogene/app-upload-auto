@@ -34,7 +34,11 @@ Write-Host "serve DOWN  $HealthUrl"
 if (-not $NoRestart) {
     $start = Join-Path $Root "scripts\windows\start-serve-watch.ps1"
     Write-Host "Restarting via $start"
-    powershell -NoProfile -ExecutionPolicy Bypass -File $start
+    Start-Process -FilePath "powershell.exe" `
+        -ArgumentList @("-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", $start) `
+        -WindowStyle Hidden `
+        -WorkingDirectory $Root |
+        Out-Null
     Start-Sleep -Seconds 6
     $ok = Test-ServeHealth
     if ($ok) {

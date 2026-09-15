@@ -1,5 +1,8 @@
-# Stop local serve watch process (read-only; does not touch store data)
+# Stop local serve watch process (read-only; does not touch store data).
+# Also disable ServeHealth so the 15-min patrol does not start serve again.
 $ErrorActionPreference = "Continue"
+Disable-ScheduledTask -TaskName "AppUploadAuto-ServeHealth" -ErrorAction SilentlyContinue | Out-Null
+Write-Host "Disabled scheduled task AppUploadAuto-ServeHealth (if present)"
 $killed = 0
 Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -and ($_.CommandLine -match 'cli\.py serve') } |

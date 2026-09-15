@@ -46,12 +46,21 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\start-serve-watch.ps1
 
 ### 人工中断
 
-| 目的 | 命令 |
-|------|------|
-| 临时停进程 | `powershell -File .\scripts\windows\stop-serve-watch.ps1` |
-| 禁用开机自启（任务还在） | `Disable-ScheduledTask -TaskName AppUploadAuto-ServeWatch` |
-| 重新启用自启 | `Enable-ScheduledTask -TaskName AppUploadAuto-ServeWatch` |
-| 彻底卸载自启并停进程 | `powershell -File .\scripts\windows\uninstall-autostart.ps1` |
+下面三条仍然可用。`stop` / `uninstall-autostart` 会**一并处理巡检** `AppUploadAuto-ServeHealth`（否则 15 分钟后巡检会把 serve 再拉起）。
+
+```powershell
+# 停进程 + 禁用巡检（避免被再拉起）
+powershell -File F:\app-upload-auto\scripts\windows\stop-serve-watch.ps1
+# 禁用开机自启（任务还在；巡检请一并禁用）
+Disable-ScheduledTask -TaskName AppUploadAuto-ServeWatch
+Disable-ScheduledTask -TaskName AppUploadAuto-ServeHealth
+# 卸载开机自启 + 卸载巡检 + 停进程
+powershell -File F:\app-upload-auto\scripts\windows\uninstall-autostart.ps1
+```
+
+只禁用 `AppUploadAuto-ServeWatch`、不禁用 Health 时，巡检仍可能把 serve 拉起来。
+
+重新开盯盘：`powershell -File .\scripts\windows\start-serve-watch.ps1`（会重新启用巡检任务，若仍已安装）。
 
 中断后**不影响**商店线上版本，只是本机不再轮询 / 发飞书。
 

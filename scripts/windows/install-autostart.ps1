@@ -10,13 +10,14 @@ if (-not (Test-Path $StartScript)) {
 }
 
 $TaskName = "AppUploadAuto-ServeWatch"
-$Arg = "-NoProfile -ExecutionPolicy Bypass -File `"$StartScript`""
+$Arg = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$StartScript`""
 $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $Arg -WorkingDirectory $Root
 $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $Settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
+    -Hidden `
     -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -RestartCount 3 `
     -RestartInterval (New-TimeSpan -Minutes 1)

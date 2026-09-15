@@ -9,4 +9,9 @@ if (-not (Test-Path (Join-Path $Root "cli.py"))) {
 Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
 Write-Host "已卸载计划任务: $TaskName"
 
+$HealthUninstall = Join-Path $Root "scripts\windows\uninstall-serve-healthcheck.ps1"
+if (Test-Path $HealthUninstall) {
+    & $HealthUninstall
+}
+
 & (Join-Path $Root "scripts\windows\stop-serve-watch.ps1")
