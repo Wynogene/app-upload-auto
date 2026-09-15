@@ -85,3 +85,15 @@ class Notifier:
             buttons=None,
             template="orange",
         )
+
+    def notify_owner(self, *, title: str, markdown: str, template: str = "orange") -> dict:
+        """只发给 resolve_notify_target（个人模式下强制本人）。不写商店。"""
+        id_type, receive_id = self._target(None)
+        return self.client.send_interactive(
+            receive_id=receive_id,
+            receive_id_type=id_type,
+            title=f"[个人调试] {title}",
+            markdown=markdown,
+            buttons=None,
+            template=template,
+        )

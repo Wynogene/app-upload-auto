@@ -60,6 +60,9 @@ python cli.py status --app-id blurams --notify
 python cli.py upload-submit --app-id blurams --platform android --artifact D:\build\app.aab --notify
 ```
 
+发版固定命令收口：[RELEASE_PLAYBOOK.md](./RELEASE_PLAYBOOK.md)。  
+serve 巡检 / 切群清单（默认勿切群）：[OPS_PERSONAL_ONLY.md](./OPS_PERSONAL_ONLY.md)。
+
 `panel` 在个人模式下会发**无回调按钮**的卡片到你私聊，仅作展示。
 
 ## 产物隔离清单

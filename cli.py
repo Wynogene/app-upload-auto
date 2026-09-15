@@ -378,7 +378,7 @@ def watch(
     last_heartbeat_at = 0.0
     started_at = time.time()
 
-    if version_code:
+    if version_code or platform == "ios":
         upsert_target(
             app_id=app_id,
             platform=platform,
@@ -432,13 +432,13 @@ def watch(
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("notify failed: {}", exc)
                 last_fp = fp
-                if version_code:
-                    from app.core.watch_targets import update_target_fields
+                from app.core.watch_targets import update_target_fields
 
-                    update_target_fields(
-                        f"{app_id}:{platform}:{version_code}",
-                        last_fingerprint=fp,
-                    )
+                key_vc = version_code or "-"
+                update_target_fields(
+                    f"{app_id}:{platform}:{key_vc}",
+                    last_fingerprint=fp,
+                )
 
             if heartbeat_hours > 0 and notify:
                 base = last_heartbeat_at or started_at
@@ -495,6 +495,41 @@ def apps_cmd(status: bool, include_disabled: bool, json_out: bool) -> None:
     else:
         click.echo(format_apps_table(rows))
         click.echo("详见 docs/ANDROID_APPS.md")
+
+
+@cli.command("apps-ready")
+@click.option("--app-id", "app_ids", multiple=True, help="只检查指定 app（可重复）；默认全部启用项")
+@click.option(
+    "--include-disabled/--no-include-disabled",
+    default=False,
+    help="是否包含双端都 disabled 的条目",
+)
+@click.option(
+    "--probe-asc/--no-probe-asc",
+    default=True,
+    help="是否只读探测 ASC（确认 App 对密钥可见）；默认开",
+)
+@click.option("--json-out", "json_out", is_flag=True, default=False, help="输出 JSON")
+def apps_ready_cmd(
+    app_ids: tuple[str, ...],
+    include_disabled: bool,
+    probe_asc: bool,
+    json_out: bool,
+) -> None:
+    """真上传前多 App 就绪检查（只读：配置/密钥/ASC 可见性/盯盘覆盖，不写商店）。"""
+    from app.core.apps_ready import format_apps_ready, items_to_dicts, run_apps_ready
+
+    items = run_apps_ready(
+        include_disabled=include_disabled,
+        probe_asc=probe_asc,
+        app_ids=list(app_ids) or None,
+    )
+    if json_out:
+        click.echo(json.dumps(items_to_dicts(items), ensure_ascii=False, indent=2))
+    else:
+        click.echo(format_apps_ready(items))
+    if any(not i.ok for i in items):
+        raise SystemExit(1)
 
 
 @cli.command("apple-check")

@@ -5,7 +5,10 @@
 | app-id | 需 versionCode |
 |--------|----------------|
 | blurams | **> 1952** |
-| easelife | **> 10420** |
+| easelife | **> 10428** |
+| boykeep | **> 2184** |
+
+> 完整固定命令见 [RELEASE_PLAYBOOK.md](./RELEASE_PLAYBOOK.md)。
 
 ## 阶段 0：有新 AAB 时立刻执行
 
