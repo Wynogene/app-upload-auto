@@ -135,6 +135,11 @@ def start_scheduler() -> BackgroundScheduler:
     scheduler.start()
     _scheduler = scheduler
     logger.info("scheduler started, poll every {} minutes", minutes)
+    # 启动后立刻扫一轮（只读），避免干等整个 interval
+    try:
+        poll_review_status_job()
+    except Exception:  # noqa: BLE001
+        logger.exception("initial poll_review_status_job failed")
     return scheduler
 
 

@@ -121,6 +121,7 @@ apps:
       artifact_path: ""
 
 # 常驻盯盘：需同时 SCHEDULE_ENABLED=true + poll_review_status: true，见 docs/SCHEDULE_WATCH.md
+# 开机自启（方式 B）：scripts/windows/install-autostart.ps1
 schedule:
-  poll_review_status: false
+  poll_review_status: true
   interval_minutes: 30

@@ -95,7 +95,12 @@ def load_targets() -> list[WatchTarget]:
                 submitted_at=float(item.get("submitted_at") or time.time()),
                 last_fingerprint=str(item.get("last_fingerprint") or ""),
                 last_heartbeat_at=float(item.get("last_heartbeat_at") or 0.0),
-                heartbeat_hours=float(item.get("heartbeat_hours") or 12.0),
+                # 注意：0 表示关闭心跳，不能用 `or 12`（0 会被当成假值）
+                heartbeat_hours=(
+                    12.0
+                    if item.get("heartbeat_hours") is None
+                    else float(item.get("heartbeat_hours"))
+                ),
                 active=bool(item.get("active", True)),
                 note=str(item.get("note") or ""),
             )

@@ -39,3 +39,19 @@ def test_console_hints_for_mixed() -> None:
     assert ANDROID_HINT in text
     assert IOS_HINT in text
     assert text.index(ANDROID_HINT) < text.index(IOS_HINT)
+
+
+def test_load_targets_keeps_zero_heartbeat(tmp_path, monkeypatch) -> None:
+    from app.core import watch_targets as wt
+
+    path = tmp_path / "watch_targets.json"
+    monkeypatch.setattr(wt, "WATCH_TARGETS_PATH", path)
+    monkeypatch.setattr(wt, "DATA_DIR", tmp_path)
+    wt.upsert_target(
+        app_id="easelife",
+        platform="android",
+        version_code="10428",
+        heartbeat_hours=0.0,
+    )
+    loaded = wt.load_targets()
+    assert loaded[0].heartbeat_hours == 0.0
