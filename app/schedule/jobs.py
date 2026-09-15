@@ -8,8 +8,8 @@ from loguru import logger
 from app.config import get_settings, load_apps_config
 from app.core.service import AppReleaseService
 from app.core.watch_targets import (
-    CONSOLE_HINT,
     active_targets,
+    console_hints_for,
     update_target_fields,
 )
 from app.notify.feishu_notify import Notifier
@@ -19,7 +19,8 @@ _last_fingerprint: dict[str, str] = {}
 
 
 def _fingerprint(app_id: str, platform: str, state: str, message: str) -> str:
-    return f"{app_id}|{platform}|{state}|{message}"
+    # 与 cli watch 保持一致：state|message（避免 serve/cli 格式不一致导致误报）
+    return f"{state}|{message}"
 
 
 def poll_review_status_job() -> None:
@@ -31,6 +32,7 @@ def poll_review_status_job() -> None:
     notifier = Notifier()
     changed = []
     heartbeats = []
+    change_titles: dict[str, str] = {}
 
     # 1) 优先扫已登记的盯盘目标（含 versionCode，prefer production）
     targets_by_key = {t.key: t for t in active_targets()}
@@ -51,6 +53,17 @@ def poll_review_status_job() -> None:
             # 首次建档只记指纹不刷屏；已有 prev 才算变化
             if prev:
                 changed.append(status)
+                prev_state, prev_msg = (
+                    prev.split("|", 1) if "|" in prev else (prev, "")
+                )
+                from app.core.notify_titles import review_change_notify_title
+
+                change_titles[key] = review_change_notify_title(
+                    prev_state,
+                    status.state,
+                    previous_message=prev_msg,
+                    current_message=status.message,
+                )
 
         if target and target.heartbeat_hours > 0:
             now = time.time()
@@ -70,16 +83,21 @@ def poll_review_status_job() -> None:
                 status.message,
             )
             if _last_fingerprint.get(key) != fp:
+                prev = _last_fingerprint.get(key, "")
                 _last_fingerprint[key] = fp
-                changed.append(status)
+                if prev:
+                    changed.append(status)
 
     if changed:
         logger.info("review status changed: {} items", len(changed))
         try:
+            title = "审核/发布状态变化"
+            if len(changed) == 1 and change_titles:
+                title = next(iter(change_titles.values()))
             notifier.notify_review_statuses(
                 changed,
-                title="审核/发布状态变化",
-                footer=CONSOLE_HINT,
+                title=title,
+                footer=console_hints_for([s.platform.value for s in changed]),
             )
         except Exception:  # noqa: BLE001
             logger.exception("notify review status failed")
@@ -90,7 +108,7 @@ def poll_review_status_job() -> None:
             notifier.notify_review_statuses(
                 heartbeats,
                 title="审核盯盘心跳提醒",
-                footer=CONSOLE_HINT,
+                footer=console_hints_for([s.platform.value for s in heartbeats]),
             )
         except Exception:  # noqa: BLE001
             logger.exception("notify heartbeat failed")

@@ -5,12 +5,15 @@ from __future__ import annotations
 import pytest
 
 from app.core.rollout import (
+    BUILTIN_DEFAULT_PERCENT,
     RolloutSpecError,
     compare_rollout,
     describe_rollout,
     is_staged,
     parse_rollout_percent,
     release_status_for,
+    resolve_default_rollout_percent,
+    resolve_rollout_fraction,
     validate_rollout_track,
 )
 from app.models import Platform, SubmitRequest, UploadRequest
@@ -31,6 +34,7 @@ class TestParseRolloutPercent:
             ("99.9", 0.999),
             ("100", 1.0),
             ("100%", 1.0),
+            ("5", 0.05),
         ],
     )
     def test_parses(self, raw, expected):
@@ -42,11 +46,100 @@ class TestParseRolloutPercent:
             parse_rollout_percent(raw)
 
 
+class TestResolveDefault:
+    def test_apps_yaml_overrides(self):
+        assert resolve_default_rollout_percent({"android": {"rollout_percent_default": 5}}) == 5.0
+        assert resolve_default_rollout_percent({"android": {"rollout_percent_default": "10%"}}) == 10.0
+
+    def test_empty_string_disables_default(self):
+        assert resolve_default_rollout_percent({"android": {"rollout_percent_default": ""}}) is None
+
+    def test_builtin_when_settings_default(self, monkeypatch):
+        from app import config as cfg
+
+        monkeypatch.setattr(
+            cfg,
+            "get_settings",
+            lambda: type("S", (), {"rollout_percent_default": "5"})(),
+        )
+        assert resolve_default_rollout_percent({}) == 5.0
+        assert BUILTIN_DEFAULT_PERCENT == 5.0
+
+
+class TestResolveRolloutFraction:
+    def test_explicit_wins(self):
+        frac, src = resolve_rollout_fraction(
+            explicit=0.2,
+            track="production",
+            app_cfg={"android": {"rollout_percent_default": 5}},
+        )
+        assert frac == 0.2
+        assert src == "explicit"
+
+    def test_production_uses_default_5(self):
+        frac, src = resolve_rollout_fraction(
+            explicit=None,
+            track="production",
+            app_cfg={"android": {"rollout_percent_default": 5}},
+        )
+        assert frac == 0.05
+        assert src == "default"
+
+    def test_internal_ignores_default(self):
+        frac, src = resolve_rollout_fraction(
+            explicit=None,
+            track="internal",
+            app_cfg={"android": {"rollout_percent_default": 5}},
+        )
+        assert frac is None
+        assert src is None
+
+    def test_draft_ignores_default(self):
+        frac, src = resolve_rollout_fraction(
+            explicit=None,
+            track="production",
+            app_cfg={"android": {"rollout_percent_default": 5}},
+            release_status="draft",
+        )
+        assert frac is None
+        assert src is None
+
+    def test_halted_ignores_default(self):
+        frac, src = resolve_rollout_fraction(
+            explicit=None,
+            track="production",
+            app_cfg={"android": {"rollout_percent_default": 5}},
+            release_status="halted",
+        )
+        assert frac is None
+        assert src is None
+
+    def test_empty_config_means_full_release(self):
+        frac, src = resolve_rollout_fraction(
+            explicit=None,
+            track="production",
+            app_cfg={"android": {"rollout_percent_default": ""}},
+        )
+        assert frac is None
+        assert src is None
+
+    def test_default_100_means_full(self):
+        frac, src = resolve_rollout_fraction(
+            explicit=None,
+            track="production",
+            app_cfg={"android": {"rollout_percent_default": 100}},
+        )
+        assert frac == 1.0
+        assert src == "default"
+        assert is_staged(frac) is False
+
+
 class TestIsStaged:
     @pytest.mark.parametrize(
         ("fraction", "expected"),
         [
             (None, False),
+            (0.05, True),
             (0.1, True),
             (0.5, True),
             (0.999, True),
@@ -61,6 +154,7 @@ class TestIsStaged:
 
 class TestReleaseStatusFor:
     def test_staged_uses_inprogress(self):
+        assert release_status_for(0.05) == "inprogress"
         assert release_status_for(0.1) == "inprogress"
         assert release_status_for(0.99) == "inprogress"
 
@@ -71,6 +165,7 @@ class TestReleaseStatusFor:
 
 class TestValidateRolloutTrack:
     def test_staged_on_production_ok(self):
+        assert validate_rollout_track(0.05, "production") is None
         assert validate_rollout_track(0.1, "production") is None
 
     @pytest.mark.parametrize("track", ["internal", "alpha", "beta"])
@@ -93,6 +188,7 @@ class TestDescribeRollout:
         assert "100" in describe_rollout(1.0)
 
     def test_staged_no_trailing_zeros(self):
+        assert describe_rollout(0.05) == "分阶段发布 5%"
         assert describe_rollout(0.1) == "分阶段发布 10%"
         assert describe_rollout(0.25) == "分阶段发布 25%"
         assert describe_rollout(0.075) == "分阶段发布 7.5%"

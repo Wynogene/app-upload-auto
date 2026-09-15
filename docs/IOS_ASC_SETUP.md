@@ -183,6 +183,26 @@ Apple 的原始状态与项目内 `ReviewState` 的映射（`app/stores/apple_st
 - Apple 有新旧两个字段并存（`appStoreState` 旧 / `appVersionState` 新），本工具优先取新字段，两个都能解析。
 - 状态为 `approved` 且原始值为 `PENDING_DEVELOPER_RELEASE` 时，提示语会明确提醒**这是「手动发布」模式，需你到 ASC 点发布才对用户生效**（对应 Google Play 的自管式发布）。
 
+### 分批发布（Phased Release）
+
+iOS **不能自定义百分比**。提审前只选是否开启 7 天分批；开启后按固定曲线自动抬升
+（1%→2%→5%→10%→20%→50%→100%，仅对自动更新用户）。
+
+`status` / `watch` 会只读拉取：
+
+`GET /v1/appStoreVersions/{id}/appStoreVersionPhasedRelease`
+
+并在文案中带上 `ACTIVE/PAUSED/COMPLETE` 与第几天（约比例）。盯盘仅在以下变化时通知：
+
+| 跳变 | 通知含义 |
+|------|----------|
+| 审核中 → `PENDING_DEVELOPER_RELEASE` | 过审、手动发布尚未上架 |
+| 审核中 → `READY_FOR_*` | 过审并已上架（可含分批开始） |
+| 分批第 N 天 → 第 N+1 天 | 分批进度更新 |
+| → `PAUSED` / `COMPLETE` | 暂停或已全量 |
+
+全程只读，不写 ASC。
+
 ## 七、上传前校验（已可用，零写入）
 
 `ipa-check` 会在真正上传前拦下必然失败的包——IPA 动辄几百 MB，Apple 还要再处理一轮，

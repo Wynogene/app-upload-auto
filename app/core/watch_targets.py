@@ -13,12 +13,42 @@ from app.config import ROOT_DIR
 DATA_DIR = ROOT_DIR / "data"
 WATCH_TARGETS_PATH = DATA_DIR / "watch_targets.json"
 
-CONSOLE_HINT = (
-    "进度以 Play Console 为准（测试轨道 / 正式版 / 发布概览均可）。"
-    "请到 Console → 监控与改进 → 政策和计划 → 政策状态，查看是否有待办与期限；"
-    "政策原因与倒计时以 Console 页面和邮件为准（本工具无法通过 API 读取）。"
-    "是否自动对用户上线由运营在控制台发布设置决定；本工具只负责上传与送审，不会代运营点「发布」。"
+ANDROID_HINT = (
+    "进度以 Play Console（正式版 / 发布概览）为准；政策待办与期限请到"
+    "「监控与改进 → 政策和计划 → 政策状态」查看（本工具无法通过 API 读取）。"
+    "本工具可：上传 AAB、设定分批比例（如默认 5%）、送审并盯盘通知；"
+    "不会代点「发布」或把分批改成全量。若开启自管式发布，过审后仍需运营在控制台发布后才对用户可见。"
 )
+
+IOS_HINT = (
+    "进度以 App Store Connect 为准；政策/拒信以 ASC 与邮件为准。"
+    "本工具可：上传 IPA、读取审核与分批进度（Apple 固定 7 天曲线，不可自定义比例）、盯盘通知；"
+    "不会代点「发布到全部用户」或暂停/恢复分批。若选择手动发布，过审后仍需在 ASC 确认上线。"
+)
+
+# 兼容旧引用：默认按 Android（历史调用点多为 Play）
+CONSOLE_HINT = ANDROID_HINT
+
+
+def console_hint_for(platform: str | None) -> str:
+    """按平台返回控制台提示文案。"""
+    p = (platform or "").strip().lower()
+    if p in {"ios", "iphone", "ipad"}:
+        return IOS_HINT
+    return ANDROID_HINT
+
+
+def console_hints_for(platforms: list[str] | None) -> str:
+    """多平台合并提示（去重，顺序：先出现的平台优先）。"""
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for raw in platforms or []:
+        hint = console_hint_for(raw)
+        if hint in seen:
+            continue
+        seen.add(hint)
+        ordered.append(hint)
+    return "\n".join(ordered) if ordered else ANDROID_HINT
 
 
 @dataclass

@@ -9,7 +9,14 @@ from pathlib import Path
 import pytest
 
 from app.core.versions import compare_versions, is_version_greater, parse_version_tuple
+from app.core.notify_titles import review_change_notify_title
 from app.models import ReviewState
+from app.stores.apple_phased import (
+    describe_phased_release,
+    ios_phased_notify_title,
+    parse_phased_fingerprint,
+    phased_percent_for_day,
+)
 from app.stores.apple_preflight import (
     check_ipa_preflight,
     format_issues,
@@ -50,6 +57,65 @@ def test_is_version_greater_no_baseline() -> None:
     assert is_version_greater("1.0", None) is True
     assert is_version_greater("5.1049.125", "5.1049.125") is False
     assert is_version_greater("5.1049.126", "5.1049.125") is True
+
+
+# ---------------- 分批发布 ----------------
+
+
+def test_phased_day_percent_curve() -> None:
+    assert phased_percent_for_day(1) == 1
+    assert phased_percent_for_day(7) == 100
+    assert phased_percent_for_day(99) is None
+
+
+def test_describe_phased_release_active_day1() -> None:
+    text = describe_phased_release(
+        {
+            "phasedReleaseState": "ACTIVE",
+            "currentDayNumber": 1,
+            "startDate": "2026-09-14T21:11:27Z",
+            "totalPauseDuration": 0,
+        }
+    )
+    assert text is not None
+    assert "分批：ACTIVE 第1天≈1%" in text
+    assert "开始于" in text
+    state, day = parse_phased_fingerprint(text)
+    assert state == "ACTIVE"
+    assert day == 1
+
+
+def test_ios_phased_notify_titles() -> None:
+    prev = "5.1：已上线；分批：ACTIVE 第1天≈1%（分批进行中）"
+    new = "5.1：已上线；分批：ACTIVE 第2天≈2%（分批进行中）"
+    assert "第2天" in (ios_phased_notify_title(prev, new) or "")
+
+    assert "暂停" in (
+        ios_phased_notify_title(prev, "5.1：已上线；分批：PAUSED 第1天≈1%（分批已暂停）") or ""
+    )
+    assert "全量" in (
+        ios_phased_notify_title(prev, "5.1：已上线；分批：COMPLETE（分批已结束（全量））") or ""
+    )
+
+
+def test_review_change_title_prefers_approval_then_phased() -> None:
+    # 过审优先
+    t = review_change_notify_title(
+        ReviewState.IN_REVIEW,
+        ReviewState.APPROVED,
+        previous_message="审核中",
+        current_message="已通过，等待你手动发布",
+    )
+    assert "过审" in t or "通过" in t
+
+    # 同为 released，分批天数变化
+    t2 = review_change_notify_title(
+        ReviewState.RELEASED,
+        ReviewState.RELEASED,
+        previous_message="5.1：已上线；分批：ACTIVE 第1天≈1%（分批进行中）",
+        current_message="5.1：已上线；分批：ACTIVE 第3天≈5%（分批进行中）",
+    )
+    assert "第3天" in t2
 
 
 # ---------------- 状态映射 ----------------

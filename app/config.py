@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     release_notes_locales: str = "en-US"
     # 运营已确认的默认文案（不是工具编造的）。留空则正式版必须显式传 --whats-new。
     release_notes_default: str = ""
+    # 正式版未传 --rollout 时的默认分批百分比。留空字符串 = 关闭默认分批（不传即全量）。
+    # 可被 apps.yaml 的 android.rollout_percent_default 覆盖。
+    rollout_percent_default: str = "5"
     # 访问 Google API 的本地代理（httplib2 不会自动读系统代理）
     http_proxy: str = ""
     https_proxy: str = ""

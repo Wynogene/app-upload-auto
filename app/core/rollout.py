@@ -9,8 +9,10 @@
 
 语义边界（对齐 Play Console）：
 
-* 不传 / 传 100 -> 全面发布（``status=completed``，不带 ``userFraction``）
+* 传 100 -> 全面发布（``status=completed``，不带 ``userFraction``）
 * 传 0 < pct < 100 -> 分阶段发布（``status=inProgress`` + ``userFraction``）
+* **正式版不传** -> 使用配置默认比例（默认 5%，见 ``resolve_rollout_fraction``）
+* 测试轨道不传 -> 全量（测试轨不支持分批）
 
 注意：分阶段发布只有 **production** 轨道支持，测试轨道传 ``userFraction``
 会被 Google 拒绝，所以这里做前置校验，避免传完 200MB 才失败。
@@ -24,6 +26,9 @@ MAX_FRACTION = 0.9999
 
 STAGED_TRACKS = frozenset({"production"})
 
+# 正式版未显式传 --rollout 时的内置默认百分比（可被 apps.yaml / .env 覆盖）。
+BUILTIN_DEFAULT_PERCENT = 5.0
+
 
 class RolloutSpecError(ValueError):
     """分阶段发布参数不合法。"""
@@ -32,7 +37,7 @@ class RolloutSpecError(ValueError):
 def parse_rollout_percent(value: str | int | float | None) -> float | None:
     """把百分比解析成小数比例。
 
-    * ``None`` / 空串 -> ``None``（未启用，走全面发布）
+    * ``None`` / 空串 -> ``None``（未启用，由调用方决定是否套默认）
     * ``100`` / ``"100%"`` -> ``1.0``（显式全量，语义等同全面发布）
     * ``10`` / ``"10%"`` -> ``0.1``
 
@@ -64,6 +69,73 @@ def parse_rollout_percent(value: str | int | float | None) -> float | None:
     if percent >= 100:
         return 1.0
     return round(percent / 100.0, 6)
+
+
+def resolve_default_rollout_percent(app_cfg: dict | None) -> float | None:
+    """读取配置层的默认百分比。
+
+    优先级：apps.yaml ``android.rollout_percent_default`` >
+    ``.env`` ``ROLLOUT_PERCENT_DEFAULT`` > 内置 5。
+
+    * 返回 ``None`` 表示「不要默认分批」（走全面发布），仅当配置显式留空字符串时。
+    * 返回数字（如 ``5.0`` / ``100.0``）供 ``parse_rollout_percent`` 再转小数。
+    """
+    android = (app_cfg or {}).get("android") or {}
+    raw = android.get("rollout_percent_default", None)
+    if raw is None:
+        from app.config import get_settings
+
+        raw = get_settings().rollout_percent_default
+    if raw is None:
+        return BUILTIN_DEFAULT_PERCENT
+    if isinstance(raw, str) and not raw.strip():
+        # 显式空串 = 关闭默认分批，恢复「不传即全量」
+        return None
+    try:
+        percent = float(str(raw).strip().rstrip("%"))
+    except (TypeError, ValueError) as exc:
+        raise RolloutSpecError(
+            f"默认分批比例无法识别：{raw!r}。"
+            f"请在 apps.yaml 的 android.rollout_percent_default "
+            f"或 .env 的 ROLLOUT_PERCENT_DEFAULT 填入 1~100 的数字。"
+        ) from exc
+    if percent <= 0 or percent > 100:
+        raise RolloutSpecError(
+            f"默认分批比例必须在 (0, 100]：当前配置为 {raw!r}"
+        )
+    return percent
+
+
+def resolve_rollout_fraction(
+    *,
+    explicit: float | None,
+    track: str,
+    app_cfg: dict | None = None,
+    release_status: str | None = None,
+) -> tuple[float | None, str | None]:
+    """解析最终要用的放量比例。
+
+    返回 ``(fraction, source)``：
+    * source = ``explicit``：CLI / 请求显式传入
+    * source = ``default``：套用配置默认（正式版）
+    * source = ``None``：无分批（全面发布，或测试轨 / draft / halted）
+
+    ``draft`` / ``halted`` 不套默认分批：它们有自己的语义，由调用方单独处理。
+    """
+    if explicit is not None:
+        return explicit, "explicit"
+
+    status = (release_status or "").strip().lower()
+    if status in {"draft", "halted"}:
+        return None, None
+
+    if (track or "").strip().lower() not in STAGED_TRACKS:
+        return None, None
+
+    default_pct = resolve_default_rollout_percent(app_cfg)
+    if default_pct is None:
+        return None, None
+    return parse_rollout_percent(default_pct), "default"
 
 
 def is_staged(fraction: float | None) -> bool:

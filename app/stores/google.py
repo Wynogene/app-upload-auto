@@ -138,6 +138,27 @@ class GoogleStoreClient(StoreClient):
             path = Path(__file__).resolve().parents[2] / path
         return path
 
+    def _authorized_session(self, app_cfg: dict | None = None):
+        """带代理的 AuthorizedSession（生命周期只读 GET 与 Publisher 共用）。"""
+        from google.auth.transport.requests import AuthorizedSession
+        from google.oauth2 import service_account
+
+        from app.config import apply_proxy_env, get_google_proxy_url
+
+        apply_proxy_env()
+        sa_path = self._sa_path(app_cfg or {})
+        if not sa_path.exists():
+            raise RuntimeError(f"Google Play 服务账号文件不存在: {sa_path}")
+        creds = service_account.Credentials.from_service_account_file(
+            str(sa_path),
+            scopes=["https://www.googleapis.com/auth/androidpublisher"],
+        )
+        session = AuthorizedSession(creds)
+        proxy_url = get_google_proxy_url()
+        if proxy_url:
+            session.proxies.update({"http": proxy_url, "https": proxy_url})
+        return session
+
     def _resolve_track(
         self,
         req_track: str | None,
@@ -198,25 +219,13 @@ class GoogleStoreClient(StoreClient):
         return notes, None, source
 
     def _publisher(self, app_cfg: dict | None = None, timeout: int = 120):
-        from google.auth.transport.requests import AuthorizedSession
-        from google.oauth2 import service_account
         from googleapiclient.discovery import build
 
-        from app.config import apply_proxy_env, get_google_proxy_url
+        from app.config import get_google_proxy_url
 
-        apply_proxy_env()
-        sa_path = self._sa_path(app_cfg or {})
-        if not sa_path.exists():
-            raise RuntimeError(f"Google Play 服务账号文件不存在: {sa_path}")
-        creds = service_account.Credentials.from_service_account_file(
-            str(sa_path),
-            scopes=["https://www.googleapis.com/auth/androidpublisher"],
-        )
-
+        session = self._authorized_session(app_cfg)
         proxy_url = get_google_proxy_url()
-        session = AuthorizedSession(creds)
         if proxy_url:
-            session.proxies.update({"http": proxy_url, "https": proxy_url})
             logger.info("Google API via requests proxy {}", proxy_url)
         else:
             logger.warning("未配置 HTTP(S)_PROXY，Google API 可能在国内超时")
@@ -248,10 +257,22 @@ class GoogleStoreClient(StoreClient):
             "versionCodes": [str(version_code)],
             "status": _to_api_status(status),
         }
-        # 分阶段发布：Google 只在 status inProgress/halted 时接受 userFraction，
-        # 且必须严格落在 (0, 1)。全面发布（completed）绝不能带这个字段。
-        if user_fraction is not None and status in {"inprogress", "halted"}:
-            release["userFraction"] = float(user_fraction)
+        # userFraction 的合法性（实测得出的 Google 行为）：
+        #   * completed -> 绝不能带（会 400）
+        #   * inProgress -> 需要 (0, 1) 开区间
+        #   * halted     -> 必须带，且同样不能是 1.0（否则 400 "User fraction must be less than 1"）
+        if status in {"inprogress", "halted"}:
+            if user_fraction is None:
+                if status == "halted":
+                    raise ValueError(
+                        "停发(halted)必须指定放量比例（Google 要求），请加 --rollout，例如 --rollout 10"
+                    )
+            elif not 0 < float(user_fraction) < 1:
+                raise ValueError(
+                    f"放量比例必须介于 0 与 100% 之间（不含两端），当前为 {user_fraction}"
+                )
+            else:
+                release["userFraction"] = float(user_fraction)
         # releaseNotes 在 API 中是可选的。省略 = 商店不展示版本说明；
         # 绝不能替用户编一句，否则正式版会把工具文案展示给真实用户。
         if release_notes:
@@ -297,13 +318,28 @@ class GoogleStoreClient(StoreClient):
 
         # 分阶段发布同样要在「上传大文件之前」校验完
         from app.core.rollout import (
+            RolloutSpecError,
             describe_rollout,
             is_staged,
             release_status_for,
+            resolve_rollout_fraction,
             validate_rollout_track,
         )
 
-        rollout_fraction = getattr(req, "rollout_fraction", None)
+        try:
+            rollout_fraction, rollout_source = resolve_rollout_fraction(
+                explicit=getattr(req, "rollout_fraction", None),
+                track=track,
+                app_cfg=app_cfg,
+            )
+        except RolloutSpecError as exc:
+            return OperationResult(
+                ok=False,
+                app_id=req.app_id,
+                platform=Platform.ANDROID,
+                message=f"分阶段发布配置有误：{exc}",
+                details={"track": track},
+            )
         rollout_error = validate_rollout_track(rollout_fraction, track)
         if rollout_error:
             return OperationResult(
@@ -527,8 +563,12 @@ class GoogleStoreClient(StoreClient):
                 notes_note = "（未提供版本说明，商店不会展示「新版本亮点」）"
 
             if staged:
+                default_note = (
+                    "（使用配置默认放量）" if rollout_source == "default" else ""
+                )
                 rollout_note = (
-                    f"已按 {describe_rollout(rollout_fraction)} 放量（{where}）。"
+                    f"已按 {describe_rollout(rollout_fraction)} 放量{default_note}"
+                    f"（{where}）。"
                     f"确认稳定后可续推，例如：\n"
                     f"  python cli.py release --app-id {req.app_id} "
                     f"--platform android --version-code {version_code} "
@@ -558,6 +598,7 @@ class GoogleStoreClient(StoreClient):
                     "release_notes_source": notes_source,
                     "rollout": describe_rollout(rollout_fraction),
                     "rollout_fraction": rollout_fraction,
+                    "rollout_source": rollout_source,
                     "user_fraction": rollout_fraction if staged else None,
                     "track_response": track_resp,
                     "commit": commit,
@@ -622,15 +663,30 @@ class GoogleStoreClient(StoreClient):
 
         # 分阶段发布校验（在建 edit 之前）
         from app.core.rollout import (
+            RolloutSpecError,
             compare_rollout,
             describe_rollout,
             is_staged,
-            release_status_for,
+            resolve_rollout_fraction,
             validate_rollout_track,
         )
 
-        rollout_specified = getattr(req, "rollout_fraction", None) is not None
-        rollout_fraction = getattr(req, "rollout_fraction", None)
+        explicit_rollout = getattr(req, "rollout_fraction", None)
+        try:
+            rollout_fraction, rollout_source = resolve_rollout_fraction(
+                explicit=explicit_rollout,
+                track=track,
+                app_cfg=app_cfg,
+                release_status=req.release_status,
+            )
+        except RolloutSpecError as exc:
+            return OperationResult(
+                ok=False,
+                app_id=req.app_id,
+                platform=Platform.ANDROID,
+                message=f"分阶段发布配置有误：{exc}",
+                details={"track": track},
+            )
         rollout_error = validate_rollout_track(rollout_fraction, track)
         if rollout_error:
             return OperationResult(
@@ -641,10 +697,11 @@ class GoogleStoreClient(StoreClient):
                 details={"track": track, "rollout_fraction": rollout_fraction},
             )
         staged = is_staged(rollout_fraction)
-        # 分了批就由 rollout 决定 status；没传 rollout 时沿用 release_status
+        # 分了批就由 rollout 决定 status；--rollout 100（或默认配成 100）转全量；
+        # 其余沿用 release_status（draft/halted/completed）。
         if staged:
             desired_status = "inprogress"
-        elif rollout_specified and rollout_fraction is not None and rollout_fraction >= 1:
+        elif rollout_fraction is not None and rollout_fraction >= 1:
             desired_status = "completed"
         else:
             desired_status = (req.release_status or "completed").strip().lower()
@@ -664,6 +721,7 @@ class GoogleStoreClient(StoreClient):
 
         edit_id = None
         service = None
+        downgrade_warning = None
         try:
             from app.stores.google_errors import primary_release_on_track
 
@@ -687,28 +745,27 @@ class GoogleStoreClient(StoreClient):
                 current_fraction = primary.get("userFraction")
                 same_version = str(version_code) in codes
 
-                # 判定是否属于「无效 / 不被 Play 允许的推进」：
-                #   1. 已是全面发布(completed)，想退回分批(inProgress)
-                #      -> Play 只允许百分比递增，100% 是终态，直接拦下
-                #   2. 同在分批中，但放量没变大（相等或缩量）-> 无意义
-                #   3. 状态完全相同（如都已 completed）-> 无意义
-                # 其余（分批->全量、halted->重新放量等）都放行。
+                # 判定是否属于「无意义的推进」：
+                #   1. 同在分批中，但放量没变大（相等或缩量）-> 不会产生新审核
+                #   2. 状态完全相同（如都已 completed）-> 同样无意义
+                # 注意：completed(100%) -> 分批(inProgress) 经实测 **是被 Google 接受的**，
+                # 因此不再硬拦，只提示「已放量的用户无法回收」。
                 skip_reason = None
                 skip_hint = None
+                downgrade_warning = None
                 if same_version:
                     if current_status == "completed" and desired_status == "inprogress":
-                        skip_reason = "already_full_no_downgrade"
-                        skip_hint = (
-                            "该版本已是全面发布（100%），Google 不允许倒退回分批发布，"
-                            "已放量的用户也无法回收。若确实需要分批，"
-                            "请上传更高 versionCode，并在**提审时就带 --rollout**。"
+                        downgrade_warning = (
+                            "注意：该版本此前已是全面发布（100%）。"
+                            "改成分批只影响后续放量，**已经收到更新的用户无法回收**。"
                         )
                     elif desired_status == current_status == "inprogress":
                         if compare_rollout(current_fraction, rollout_fraction) <= 0:
                             skip_reason = "fraction_not_increased"
                             skip_hint = (
                                 f"当前已放量 {describe_rollout(None if current_fraction is None else float(current_fraction))}，"
-                                f"请传更大的 --rollout（例如当前 10%，续推用 --rollout 20；全量用 --rollout 100）。"
+                                f"放量未增加，不会产生新的审核。续推请传更大的 --rollout"
+                                f"（例如当前 10%，续推用 --rollout 20；全量用 --rollout 100）。"
                             )
                     elif current_status == desired_status:
                         skip_reason = "already_on_track"
@@ -746,6 +803,32 @@ class GoogleStoreClient(StoreClient):
                         },
                     )
 
+                # halted 必须带 (0,1) 的 userFraction：没显式给就沿用轨道当前比例
+                if desired_status == "halted" and not is_staged(rollout_fraction):
+                    if current_fraction is not None and 0 < float(current_fraction) < 1:
+                        rollout_fraction = float(current_fraction)
+                        staged = True
+                    else:
+                        service.edits().delete(
+                            packageName=package_name, editId=edit_id
+                        ).execute(num_retries=2)
+                        edit_id = None
+                        return OperationResult(
+                            ok=False,
+                            app_id=req.app_id,
+                            platform=Platform.ANDROID,
+                            message=(
+                                "停发(halted) 需要指定放量比例（Google 要求，且不能为 100%）。"
+                                "轨道上当前没有可沿用的比例，请显式加 --rollout，例如 --rollout 10。"
+                            ),
+                            details={
+                                "package_name": package_name,
+                                "track": track,
+                                "version_code": str(version_code),
+                                "desired_status": desired_status,
+                            },
+                        )
+
             track_resp = self._assign_track(
                 service,
                 package_name=package_name,
@@ -773,8 +856,11 @@ class GoogleStoreClient(StoreClient):
                 notes_note = f"版本说明使用默认文案：{resolve_default_text(app_cfg)}。"
 
             if staged:
+                default_note = (
+                    "（使用配置默认放量）" if rollout_source == "default" else ""
+                )
                 tail = (
-                    f"已按 {describe_rollout(rollout_fraction)} 放量。"
+                    f"已按 {describe_rollout(rollout_fraction)} 放量{default_note}。"
                     f"确认稳定后续推：`--rollout 50`；全量：`--rollout 100`。"
                 )
             elif track == "production":
@@ -792,14 +878,17 @@ class GoogleStoreClient(StoreClient):
                     f"(status={desired_status})。"
                     f"{notes_note}"
                     f"{tail}"
+                    f"{downgrade_warning or ''}"
                 ),
                 details={
                     "package_name": package_name,
                     "track": track,
                     "version_code": str(version_code),
                     "release_status": desired_status,
+                    "downgraded_from_full": bool(downgrade_warning),
                     "rollout": describe_rollout(rollout_fraction),
                     "rollout_fraction": rollout_fraction,
+                    "rollout_source": rollout_source,
                     "user_fraction": rollout_fraction if staged else None,
                     "release_notes": release_notes,
                     "release_notes_source": notes_source,
@@ -837,7 +926,7 @@ class GoogleStoreClient(StoreClient):
         version_code: str | None = None,
         prefer_track: str | None = None,
     ) -> ReviewStatus:
-        from app.core.watch_targets import CONSOLE_HINT
+        from app.core.watch_targets import ANDROID_HINT
 
         android = app_cfg.get("android") or {}
         package_name = android.get("package_name")
@@ -898,11 +987,15 @@ class GoogleStoreClient(StoreClient):
                 codes_list = [str(c) for c in (rel.get("versionCodes") or [])]
                 codes = ",".join(codes_list)
                 rname = rel.get("name") or "-"
+                frac = rel.get("userFraction")
+                frac_note = f" rollout={frac}" if frac is not None else ""
                 mark = ""
                 if target_vc and target_vc in codes_list:
                     mark = " ← target"
                     found_tracks.append(f"{name}:{st}")
-                lines.append(f"{name}: {rname} codes=[{codes}] status={st}{mark}")
+                lines.append(
+                    f"{name}: {rname} codes=[{codes}] status={st}{frac_note}{mark}"
+                )
                 if name == prefer or (
                     prefer not in by_name
                     and name == "production"
@@ -916,18 +1009,70 @@ class GoogleStoreClient(StoreClient):
                     prefer_data["releases"][0].get("status"), prefer
                 )
 
+            # --- 只读生命周期（抓住过审）：优先于旧 tracks.status ---
+            lifecycle_raw: dict | None = None
+            lifecycle_state_raw: str | None = None
+            lifecycle_key: str | None = None
+            life_header: str | None = None
+            try:
+                from app.stores.google_lifecycle import (
+                    describe_lifecycle,
+                    find_release_for_version,
+                    list_track_releases,
+                    map_lifecycle_to_review_state,
+                    normalize_lifecycle,
+                    version_codes_of,
+                )
+
+                life_track = prefer if prefer in order else "production"
+                life_releases = list_track_releases(
+                    self._authorized_session(app_cfg),
+                    package_name=package_name,
+                    track=life_track,
+                )
+                life_rel = find_release_for_version(life_releases, target_vc)
+                if life_rel is None and life_releases and not target_vc:
+                    life_rel = life_releases[0]
+                if life_rel:
+                    lifecycle_raw = life_rel
+                    lifecycle_state_raw = life_rel.get("releaseLifecycleState")
+                    lifecycle_key = normalize_lifecycle(lifecycle_state_raw)
+                    mapped = map_lifecycle_to_review_state(lifecycle_state_raw)
+                    if mapped != ReviewState.UNKNOWN:
+                        primary_state = mapped
+                    life_codes = ",".join(version_codes_of(life_rel)) or "-"
+                    life_header = (
+                        f"lifecycle[{life_track}]: "
+                        f"{lifecycle_key} "
+                        f"({describe_lifecycle(lifecycle_state_raw)}) "
+                        f"codes=[{life_codes}] "
+                        f"name={life_rel.get('releaseName') or '-'}"
+                    )
+            except Exception as life_exc:  # noqa: BLE001
+                # 生命周期接口失败时降级旧 tracks，不阻断盯盘
+                logger.warning("google lifecycle fetch failed: {}", life_exc)
+                life_header = f"lifecycle: 查询失败（已降级旧 tracks）: {life_exc}"
+
+            headers: list[str] = []
+            if life_header:
+                headers.append(life_header)
             if target_vc:
                 if found_tracks:
-                    lines.insert(
-                        0,
-                        f"target versionCode={target_vc} 出现在: {', '.join(found_tracks)}",
+                    headers.append(
+                        f"target versionCode={target_vc} 出现在: {', '.join(found_tracks)}"
                     )
                 else:
-                    lines.insert(
-                        0,
-                        f"target versionCode={target_vc} 尚未出现在 production/beta/alpha/internal",
+                    headers.append(
+                        f"target versionCode={target_vc} 尚未出现在 production/beta/alpha/internal"
                     )
-                lines.append(CONSOLE_HINT)
+            lines = headers + lines
+            if target_vc:
+                lines.append(ANDROID_HINT)
+
+            raw_out = dict(tracks) if isinstance(tracks, dict) else {"tracks": tracks}
+            if lifecycle_raw is not None:
+                raw_out["lifecycle_release"] = lifecycle_raw
+                raw_out["lifecycle_state"] = lifecycle_key
 
             return ReviewStatus(
                 app_id=app_cfg.get("id", ""),
@@ -935,7 +1080,7 @@ class GoogleStoreClient(StoreClient):
                 version_name=version_name or (f"vc={target_vc}" if target_vc else None),
                 state=primary_state,
                 message="\n".join(lines) or "无轨道数据",
-                raw=tracks,
+                raw=raw_out,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("google.status error: {}", exc)

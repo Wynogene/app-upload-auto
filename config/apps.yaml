@@ -10,6 +10,11 @@
 # - 正式轨道 production 若既没传 --whats-new、也没配默认文案，则会被拦下。
 # - 多语言：--whats-new zh-CN=... --whats-new en-US=...
 # - android.release_notes_locales 决定「纯文本」套用到哪些语言，须与商店支持的本地化语言一致。
+#
+# 分阶段发布（仅 production）：
+# - 正式版未传 --rollout 时，默认先放量 android.rollout_percent_default（默认 5%）。
+# - 全量请显式传 --rollout 100；想关闭默认分批可把该项留空字符串 ""。
+# - 测试轨道（internal/alpha/beta）不受此默认影响，始终全量。
 
 apps:
   - id: blurams
@@ -35,6 +40,8 @@ apps:
       release_notes_locales: ["en-US"]
       # 运营手工上传时使用的默认文案（可由 CLI 的 --whats-new 覆盖）
       release_notes_default: "- General: Bug fixes and system optimizations."
+      # 正式版未传 --rollout 时的默认放量百分比（全量请显式 --rollout 100）
+      rollout_percent_default: 5
       # 对应 client_email: play-publisher@sd-gcp-2026-7-15.iam.gserviceaccount.com
       service_account_json: secrets/google-play-sa-blurams-easelife.json
       artifact_url: ""
@@ -60,6 +67,7 @@ apps:
       track: internal
       release_notes_locales: ["en-US"]
       release_notes_default: "- General: Bug fixes and system optimizations."
+      rollout_percent_default: 5
       service_account_json: secrets/google-play-sa-blurams-easelife.json
       artifact_url: ""
       artifact_path: ""
@@ -87,6 +95,7 @@ apps:
       track: internal
       release_notes_locales: ["en-US"]
       release_notes_default: "- General: Bug fixes and system optimizations."
+      rollout_percent_default: 5
       # 独立 Play Console / GCP boykeep-f3983
       service_account_json: secrets/google-play-sa-boykeep.json
       artifact_url: ""

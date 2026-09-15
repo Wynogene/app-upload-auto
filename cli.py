@@ -10,7 +10,8 @@ from app.config import apply_proxy_env, get_settings
 from app.core.rollout import RolloutSpecError, parse_rollout_percent
 from app.core.service import AppReleaseService
 from app.core.watch_targets import (
-    CONSOLE_HINT,
+    ANDROID_HINT,
+    console_hint_for,
     upsert_target,
     watch_hint_command,
 )
@@ -74,7 +75,7 @@ def _echo_watch_hint_from_results(results: list) -> None:
         vc = details.get("version_code")
         if getattr(r, "ok", False) and track in {"production", "prod"} and vc:
             hint = watch_hint_command(getattr(r, "app_id", ""), str(vc))
-            click.echo(f"建议立刻盯盘:\n  {hint}\n（{CONSOLE_HINT}）", err=True)
+            click.echo(f"建议立刻盯盘:\n  {hint}\n（{ANDROID_HINT}）", err=True)
             return
 
 
@@ -113,7 +114,7 @@ def cli() -> None:
     "--rollout",
     default=None,
     callback=_rollout_callback,
-    help="分阶段发布百分比（仅 production）。如 --rollout 10 表示先放量 10%；100 表示全量。",
+    help="分阶段发布百分比（仅 production）。省略则用配置默认 5%；--rollout 100 表示全量。",
 )
 @click.option("--notify/--no-notify", default=True)
 def upload_cmd(
@@ -175,7 +176,7 @@ def upload_cmd(
     "--rollout",
     default=None,
     callback=_rollout_callback,
-    help="分阶段发布百分比（仅 production）。如 --rollout 20 表示续推到 20%；100 表示转全量。",
+    help="分阶段发布百分比（仅 production）。省略则用配置默认 5%；续推如 --rollout 20；100 表示转全量。",
 )
 @click.option("--notify/--no-notify", default=True)
 def release_cmd(
@@ -239,7 +240,7 @@ def release_cmd(
     "--rollout",
     default=None,
     callback=_rollout_callback,
-    help="分阶段发布百分比（仅 production）。如 --rollout 10 表示先放量 10%；100 表示全量。",
+    help="分阶段发布百分比（仅 production）。省略则用配置默认 5%；--rollout 100 表示全量。",
 )
 @click.option("--notify/--no-notify", default=True, help="是否推送飞书")
 def upload_submit(
@@ -304,10 +305,13 @@ def status(
     for s in statuses:
         click.echo(f"[{s.state.value}] {s.platform.value}/{s.app_id}: {s.message}", err=True)
     if notify:
+        plats = [s.platform.value for s in statuses]
+        from app.core.watch_targets import console_hints_for
+
         Notifier().notify_review_statuses(
             statuses,
             title="CLI 状态查询",
-            footer=CONSOLE_HINT if (version_code or version_name) else None,
+            footer=console_hints_for(plats) if (version_code or version_name) else None,
         )
 
 
@@ -392,7 +396,7 @@ def watch(
         + " ...",
         err=True,
     )
-    click.echo(f"提示: {CONSOLE_HINT}", err=True)
+    click.echo(f"提示: {console_hint_for(platform)}", err=True)
 
     while True:
         statuses = service.status(
@@ -408,11 +412,22 @@ def watch(
             fp = f"{s.state.value}|{s.message}"
             if fp != last_fp:
                 if last_fp and notify:
+                    prev_state, prev_msg = (
+                        last_fp.split("|", 1) if "|" in last_fp else (last_fp, "")
+                    )
+                    from app.core.notify_titles import review_change_notify_title
+
+                    title = review_change_notify_title(
+                        prev_state,
+                        s.state,
+                        previous_message=prev_msg,
+                        current_message=s.message,
+                    )
                     try:
                         Notifier().notify_review_statuses(
                             [s],
-                            title="审核/发布状态变化",
-                            footer=CONSOLE_HINT,
+                            title=title,
+                            footer=console_hint_for(s.platform.value),
                         )
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("notify failed: {}", exc)
@@ -432,7 +447,7 @@ def watch(
                         Notifier().notify_review_statuses(
                             [s],
                             title="审核盯盘心跳提醒",
-                            footer=CONSOLE_HINT,
+                            footer=console_hint_for(s.platform.value),
                         )
                         last_heartbeat_at = now
                         if version_code:

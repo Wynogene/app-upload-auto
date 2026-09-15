@@ -101,10 +101,11 @@ python cli.py upload-submit --app-id blurams --platform android --artifact D:\bu
 # 需要自定义版本说明时再加 --whats-new（可重复传入做多语言）
 python cli.py upload-submit --app-id blurams --platform android --artifact D:\build\app.aab --track production --allow-production --whats-new "修复卡顿，优化连接速度" --notify
 
-# 分阶段发布：提审时就分批，先放量 10%（仅 production；不带 --rollout 即全量）
-python cli.py upload-submit --app-id blurams --platform android --artifact D:\build\app.aab --track production --allow-production --rollout 10 --notify
+# 分阶段发布：正式版默认 5%（可不传 --rollout）；全量请显式 --rollout 100
+python cli.py upload-submit --app-id blurams --platform android --artifact D:\build\app.aab --track production --allow-production --notify
 
-# 审核通过后逐级放量（只能递增，100% 转全量；倒退会被防呆拦下）
+# 显式指定比例，或审核通过后逐级放量（只能递增；100 转全量）
+python cli.py upload-submit --app-id blurams --platform android --artifact D:\build\app.aab --track production --allow-production --rollout 10 --notify
 python cli.py release --app-id blurams --platform android --version-code 1952 --track production --allow-production --rollout 20
 python cli.py release --app-id blurams --platform android --version-code 1952 --track production --allow-production --rollout 100
 

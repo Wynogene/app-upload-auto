@@ -12,10 +12,19 @@ easelife 共用同一 Play 服务账号，见 [EASELIFE_ANDROID_RELEASE.md](./EA
 
 ## 分阶段发布（只放量给一部分用户）
 
-`--rollout` 用**百分比**表达，只有 `production` 支持：
+`--rollout` 用**百分比**表达，只有 `production` 支持。
+正式版**未传** `--rollout` 时，默认先放量 **5%**（可由
+`apps.yaml` 的 `android.rollout_percent_default` 或 `.env` 的
+`ROLLOUT_PERCENT_DEFAULT` 覆盖；留空字符串则关闭默认分批）。
 
 ```powershell
-# 提审时就分批：先放量 10%（status=inProgress）
+# 提审时不传 --rollout → 自动 5% 分批
+python cli.py upload --app-id blurams --platform android `
+  --artifact "F:\upload-test\xxx.aab" `
+  --track production --allow-production `
+  --whats-new "zh-CN=修复若干问题" --notify
+
+# 显式指定比例
 python cli.py upload --app-id blurams --platform android `
   --artifact "F:\upload-test\xxx.aab" `
   --track production --allow-production --rollout 10 `
@@ -28,26 +37,26 @@ python cli.py release --app-id blurams --platform android `
   --version-code 1940 --track production --allow-production --rollout 100   # 转全量
 ```
 
-不带 `--rollout` = 全面发布（100%），与以前行为完全一致。
+全量必须显式传 `--rollout 100`（正式版默认不再是 100%）。
 
-### 不变量（Google 的硬规则，工具会防呆拦截）
+### 不变量（实测出来的 Google 行为，工具会据此防呆）
 
-| 操作 | 是否允许 |
-|------|----------|
-| 10% → 20% → 50% → 100% | ✅ 只能**递增** |
-| 50% → 20% | ❌ 放量不能缩水 |
-| 100%（completed）→ 20% | ❌ **100% 是终态，不可倒退** |
+| 操作 | 行为 |
+|------|------|
+| 10% → 20% → 50% → 100% | ✅ 递增 |
 | 分批 → 100% | ✅ 结束分批，转全量 |
-| 测试轨道（internal/alpha/beta）+ `--rollout` | ❌ 只有 production 支持 |
+| 100%（completed）→ 分批 | ⚠️ **Google 接受**，但**已收到更新的用户无法回收**，工具会提示 |
+| 50% → 20% | ⚠️ 放量未增加，属无效操作（不产生新审核），工具会防呆跳过 |
+| internal/alpha/beta + `--rollout` | ❌ 只有 production 支持 |
+| `--release-status halted` | 必须带 `--rollout`（Google 要求 0<比例<100%，100% 会被拒） |
 
-> **想分批，必须「提审时就带上 `--rollout`」。** 一旦以 100% 提交并转为
-> `completed`，就无法再改回分批；已经放量到的用户也无法回收。
-> 唯一的下行操作是 `--release-status halted`（整体暂停放量并排查），
-> 它**不等于**回到某个更低的百分比。
+> **实践建议**：想控量就**在提审那一步带 `--rollout 10`**。虽然 Google 也接受把
+> 已 100% 的版本改回分批，但那时已经放量给用户的部分收不回来，
+> 分批的意义会打折。
 
-工具会在调用 Google API **之前**拦下这些非法操作，并给出 `reason`
-（`already_full_no_downgrade` / `fraction_not_increased`），不会产生
-假的「提交成功」，也不会白传 200MB。
+工具会在调用 Google API **之前**拦下无效操作，并给出 `reason`
+（`fraction_not_increased` / `already_on_track`），不会产生假的「提交成功」，
+也不会白传 200MB。
 
 - **internal / alpha / beta**：一般**不需要**商店人工审核，发布后测试员可装。
 - **production**：可能进入 **Google 审核**；通过后是否立刻对用户可见，由 Play Console 发布设置（含运营是否开自管式）决定。**本工具不检测该开关。**
@@ -79,6 +88,47 @@ python cli.py status --app-id blurams --platform android --notify
 ```
 
 提审后完整流程见 [AFTER_SUBMIT_WATCH.md](./AFTER_SUBMIT_WATCH.md)。
+
+## 抓住「过审」时刻（只读，不影响线上）
+
+盯盘除旧 `tracks.status` 外，还会只读拉取：
+
+`GET .../applications/{package}/tracks/production/releases`
+
+用 `releaseLifecycleState` 区分两种运营模式：
+
+| 自管式 | 过审跳变 | 飞书标题 |
+|--------|----------|----------|
+| 开启 | `IN_REVIEW` → `APPROVED_NOT_PUBLISHED` | 审核已通过（自管式：尚未对用户开放） |
+| 关闭 | `IN_REVIEW` → `PUBLISHED` | 审核已通过并已上架（含分批放量） |
+
+该接口只 GET，不建 edit、不 commit，不会改线上数据。
+旧 `inProgress` 无法区分审核中与分批上架；生命周期字段可以。
+
+## 上传错了 / 要撤下来怎么办
+
+**先说最关键的：已上传的 AAB 无法从 Google Play 删除。**
+
+- 「应用软件包浏览器」里没有删除入口；Publishing API 的
+  `edits.bundles` 也只提供 `list` / `upload` / `close`，**没有 `delete`**。
+- 一旦上传，该 `versionCode` 就被**永久占用**，永远不能再用（防复用 / 防降级），
+  即使你把它从所有轨道上撤下来。
+- 因此「换一个包重传」时，必须准备**更高 versionCode** 的新 AAB。
+
+能撤的是**轨道上的 release**，不是包本身：
+
+| 当前状态 | 能做什么 |
+|----------|----------|
+| 草稿（draft，未提交） | 直接丢弃/删除该 release，不产生审核 |
+| 已提交 / 审核中 / 待发布 | `--release-status halted` 停发；必要时重新放量 |
+| 已 100% 发布给用户 | **无法撤回**，已安装用户收不回来 |
+
+```powershell
+# 停发（必须带 --rollout；不给则沿用轨道上当前的放量比例）
+python cli.py release --app-id blurams --platform android `
+  --version-code 1952 --track production --allow-production `
+  --release-status halted --rollout 10
+```
 ## 建议节奏
 
 1. 日常先 `upload` 到 `internal` + `status/watch`

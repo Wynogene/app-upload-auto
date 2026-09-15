@@ -4,7 +4,7 @@ from loguru import logger
 
 from app.config import get_app_by_id
 from app.core.watch_targets import (
-    CONSOLE_HINT,
+    ANDROID_HINT,
     upsert_target,
     watch_hint_command,
 )
@@ -44,7 +44,7 @@ def _maybe_register_watch(result: OperationResult, req_track: str | None = None)
     logger.info("watch target registered app={} versionCode={}", app_id, vc)
     return (
         f"已登记盯盘目标 versionCode={vc}。建议立刻执行:\n  {hint}\n"
-        f"（{CONSOLE_HINT}）"
+        f"（{ANDROID_HINT}）"
     )
 
 

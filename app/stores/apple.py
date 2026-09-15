@@ -427,7 +427,8 @@ class AppleStoreClient(StoreClient):
                 params = {
                     "limit": 10,
                     "fields[appStoreVersions]": (
-                        "versionString,appStoreState,appVersionState,createdDate,platform"
+                        "versionString,appStoreState,appVersionState,"
+                        "createdDate,platform,releaseType"
                     ),
                 }
                 if version_name:
@@ -474,21 +475,40 @@ class AppleStoreClient(StoreClient):
                 attrs = target.get("attributes") or {}
                 raw_state = pick_version_state(attrs)
                 vstr = attrs.get("versionString")
+                release_type = attrs.get("releaseType")
                 state = map_version_state(raw_state)
                 state_label = describe_version_state(raw_state)
 
                 build_info = self._fetch_version_build(
                     client, target.get("id"), app_cfg, headers
                 )
+                phased_attrs = self._fetch_phased_release(
+                    client, target.get("id"), headers
+                )
+
+                from app.stores.apple_phased import describe_phased_release
 
                 msg = f"{vstr}：{state_label}"
+                if release_type:
+                    release_type_label = {
+                        "MANUAL": "手动发布",
+                        "AFTER_APPROVAL": "过审后自动发布",
+                        "SCHEDULED": "定时发布",
+                    }.get(str(release_type), str(release_type))
+                    msg += f"；发布方式={release_type_label}"
                 if build_info:
                     msg += (
-                        f"（构建 {build_info.get('version')}："
-                        f"{describe_build_processing_state(build_info.get('processingState'))}）"
+                        f"；构建 {build_info.get('version')}："
+                        f"{describe_build_processing_state(build_info.get('processingState'))}"
                     )
                 elif state == ReviewState.DRAFT:
                     msg += "；该版本还没关联构建版本，需先上传 IPA"
+
+                phased_desc = describe_phased_release(phased_attrs)
+                if phased_desc:
+                    msg += f"；{phased_desc}"
+                elif state == ReviewState.RELEASED:
+                    msg += "；未启用分批（或分批记录不可用）"
 
                 if state == ReviewState.APPROVED and raw_state == "PENDING_DEVELOPER_RELEASE":
                     msg += "。注意：这是「手动发布」模式，需你到 ASC 点发布才会对用户生效"
@@ -503,7 +523,9 @@ class AppleStoreClient(StoreClient):
                         "version_string": vstr,
                         "app_version_state": raw_state,
                         "app_version_state_label": state_label,
+                        "release_type": release_type,
                         "build": build_info,
+                        "phased_release": phased_attrs,
                     },
                     message=msg,
                 )
@@ -530,8 +552,10 @@ class AppleStoreClient(StoreClient):
         try:
             resp = client.get(
                 f"{ASC_BASE}/v1/appStoreVersions/{version_id}/build",
-                params={"fields[builds]": "version,processingState,expired,uploadedDate"},
                 headers=headers,
+                params={
+                    "fields[builds]": "version,processingState,uploadedDate,expired",
+                },
             )
             if resp.status_code >= 400:
                 return None
@@ -547,7 +571,36 @@ class AppleStoreClient(StoreClient):
                 "uploadedDate": attrs.get("uploadedDate"),
             }
         except Exception:  # noqa: BLE001
-            logger.debug("fetch version build failed version_id={}", version_id)
+            return None
+
+    def _fetch_phased_release(
+        self,
+        client: httpx.Client,
+        version_id: str | None,
+        headers: dict[str, str],
+    ) -> dict | None:
+        """只读拉取分批发布；404/空表示未启用，不视为错误。"""
+        if not version_id:
+            return None
+        from app.stores.apple_phased import extract_phased_attrs
+
+        try:
+            resp = client.get(
+                f"{ASC_BASE}/v1/appStoreVersions/{version_id}/appStoreVersionPhasedRelease",
+                headers=headers,
+            )
+            if resp.status_code == 404:
+                return None
+            if resp.status_code >= 400:
+                logger.warning(
+                    "apple phased release HTTP {}: {}",
+                    resp.status_code,
+                    resp.text[:200],
+                )
+                return None
+            return extract_phased_attrs(resp.json())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("apple phased release fetch failed: {}", exc)
             return None
 
     def list_versions(self, app_cfg: dict, limit: int = 10) -> list[dict]:

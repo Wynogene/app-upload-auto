@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.stores.google import _to_api_status
 
 
@@ -117,3 +119,46 @@ class TestAssignTrackBody:
         rel = body["releases"][0]
         assert rel["releaseNotes"] == [{"language": "en-US", "text": "hi"}]
         assert rel["userFraction"] == 0.25
+
+    def test_halted_requires_fraction(self):
+        # 实测：halted 不带 userFraction 会被 Google 拒绝
+        # （400 "HALTED release must have fraction"）
+        with pytest.raises(ValueError, match="halted"):
+            self._call(track="production", version_code=10428, release_status="halted")
+
+    def test_halted_with_fraction_ok(self):
+        body = self._call(
+            track="production",
+            version_code=10428,
+            release_status="halted",
+            user_fraction=0.1,
+        )
+        rel = body["releases"][0]
+        assert rel["status"] == "halted"
+        assert rel["userFraction"] == 0.1
+
+    def test_halted_fraction_of_one_rejected(self):
+        # 实测：userFraction=1.0 配 halted 会 400（"User fraction must be less than 1"）
+        with pytest.raises(ValueError, match="100%"):
+            self._call(
+                track="production",
+                version_code=10428,
+                release_status="halted",
+                user_fraction=1.0,
+            )
+
+    def test_inprogress_fraction_of_one_rejected(self):
+        with pytest.raises(ValueError):
+            self._call(
+                track="production",
+                version_code=10428,
+                release_status="inprogress",
+                user_fraction=1.0,
+            )
+
+    def test_inprogress_without_fraction_omits_field(self):
+        # 未给比例时不带该字段，由调用方负责补（submit 会沿用轨道现值）
+        body = self._call(
+            track="production", version_code=10428, release_status="inprogress"
+        )
+        assert "userFraction" not in body["releases"][0]
