@@ -1,61 +1,33 @@
 # App Upload Auto
 
-独立的 iOS / Android 商店上传与提审工具骨架：支持 CLI、定时轮询审核状态、飞书卡片按钮触发，以及飞书通知。
+独立的 iOS / Android 商店上传、提审与盯盘工具（Python + FastAPI CLI）。
 
-> 当前仓库为骨架：商店 upload/submit 的真实 API 调用已留好接口与注释，需配置密钥后继续补全。
-> 进度：Android 上传/发布/盯盘已可用；iOS 鉴权已打通（`cli.py apple-check`），上传与提审待接入。
+默认 **`SAFETY_PERSONAL_ONLY=true`**：飞书只私聊本人，不改现网事件订阅，不往业务群发消息。  
+盯盘 / 状态查询为**只读**；上传与提审会写商店，请先用测试轨或确认版本号。
 
-## 能力
+## 当前进度（以代码为准）
 
-| 模块 | 说明 |
-|------|------|
-| `upload` / `submit` | iOS（App Store Connect）+ Android（Google Play） |
-| `status` | 查询审核/发布状态（Android、iOS 均已接入真实映射） |
-| `apple-check` / `ipa-check` | iOS 凭证自检 / 上传前校验（版本递增、构建号查重、bundle 一致） |
-| `schedule` | APScheduler 定时轮询，状态变化才通知 |
-| `notify` | 飞书互动卡片 |
-| 飞书按钮 | `上传并提审` / `仅查询状态` |
+| 能力 | Android (Google Play) | iOS (App Store Connect) |
+|------|------------------------|-------------------------|
+| 鉴权 / 连通自检 | ✅ 服务账号 JSON | ✅ `apple-check`（`.p8`） |
+| 上传 | ✅ AAB（含正式版） | ⏳ Build Upload API（**Windows 可直传，不需 Mac**） |
+| 提审 / 推进轨道 | ✅ `upload` / `upload-submit` / `release` | ⏳ `reviewSubmissions` 待接入 |
+| 分阶段发布 | ✅ `--rollout`（正式版默认约 5%） | ✅ 只读盯盘（Apple 固定 7 天曲线） |
+| 状态 / 过审生命周期 | ✅ `status` + lifecycle | ✅ `status`（含分批进度） |
+| 上传前校验 | （版本码由 Play 拦截） | ✅ `ipa-check` |
+| 盯盘通知 | ✅ `watch` / `serve` 调度 | ✅ 同上 |
+| 运营向飞书文案 | ✅ 风格 D 字段表 | ✅ 版本精确到构建号 |
 
-## 个人调试（零影响现网，推荐先这样做）
+多 App：`blurams` + `easelife` 共用一套 Play SA / Apple 团队密钥；`boykeep` 为独立主体（Android SA 已配，iOS 需单独 `.p8`）。
 
-若要尽快跑通且**不影响现网、消息仅自己可见**，请先看：[docs/SAFE_RUNBOOK.md](docs/SAFE_RUNBOOK.md)。
+## 个人调试（推荐）
 
-默认安全开关：`SAFETY_PERSONAL_ONLY=true`（只私聊你、不改现网事件订阅、关闭群通知与回调按钮）。用 CLI 触发；飞书仅作个人结果通知。
+先看：[docs/SAFE_RUNBOOK.md](docs/SAFE_RUNBOOK.md)。
 
-## 新建飞书机器人（给运营用时再做）
-
-在 [飞书开放平台](https://open.feishu.cn/app) 创建**企业自建应用**（不要复用 ai_support 的机器人）。
-
-1. **创建应用**  
-   - 名称建议：`APP发布助手`  
-   - 获取 `App ID`、`App Secret`
-
-2. **权限（尽量最小）**  
-   - `im:message` / `im:message:send_as_bot`（发消息）  
-   - 如需更新卡片：消息相关读写权限按控制台提示勾选  
-   - **不要**默认开审批、多维表格、通讯录全量等无关权限
-
-3. **事件订阅**  
-   - 请求地址：`https://<公网域名>/feishu/webhook`  
-   - 本地调试可用 ngrok / frp 等把 `http://127.0.0.1:8088` 暴露出去  
-   - 保存页面上的 **Verification Token**（以及若启用加密则保存 Encrypt Key）到 `.env`  
-   - 订阅事件：`卡片回传交互` / `card.action.trigger`  
-   - 完成 URL 校验（服务需先启动，能返回 `challenge`）
-
-4. **机器人能力**  
-   - 开启机器人  
-   - 发布版本并申请可用范围（测试期可先对本公司）  
-   - 把机器人拉进运营群，记下群 `chat_id`（可用开放平台 API 或临时日志获取）
-
-5. **填入本项目**  
-   ```bash
-   copy .env.example .env
-   ```
-   填写：
-   - `FEISHU_APP_ID`
-   - `FEISHU_APP_SECRET`
-   - `FEISHU_VERIFICATION_TOKEN`
-   - `FEISHU_DEFAULT_CHAT_ID`
+发版固定命令：[docs/RELEASE_PLAYBOOK.md](docs/RELEASE_PLAYBOOK.md)  
+多 App 就绪检查：`python cli.py apps-ready` · [docs/MULTI_APP_READY.md](docs/MULTI_APP_READY.md)  
+常驻盯盘（方式 B）：[docs/SCHEDULE_WATCH.md](docs/SCHEDULE_WATCH.md)  
+巡检 / 切群清单（默认勿切群）：[docs/OPS_PERSONAL_ONLY.md](docs/OPS_PERSONAL_ONLY.md)
 
 ## 本地启动（Windows）
 
@@ -65,97 +37,112 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 copy .env.example .env
-copy config\apps.example.yaml config\apps.yaml
-# 编辑 .env 与 config\apps.yaml
-python cli.py serve
+# 编辑 .env（商店密钥、飞书、代理）与 config\apps.yaml
+# 常驻盯盘示例：
+#   SCHEDULE_ENABLED=true
+#   SAFETY_PERSONAL_ONLY=true
+powershell -File .\scripts\windows\start-serve-watch.ps1
 ```
 
-健康检查：`http://127.0.0.1:8088/health`
+健康检查（脚本默认端口）：`http://127.0.0.1:18088/health`  
+（直接 `python cli.py serve` 时端口以 `.env` 的 `PORT` 为准，示例多为 `8088`。）
 
-## CLI
+开机自启 + 每 15 分钟健康巡检（`pythonw`，无弹窗）：
 
 ```powershell
-# iOS 凭证自检（签名 JWT + 调 ASC /v1/apps；默认直连不走代理）
-python cli.py apple-check
-# 按 App 检查（用于 boykeep 这类独立 Apple 团队）
-python cli.py apple-check --app-id boykeep
-
-# iOS 状态查询（真实映射；可指定版本号）
-python cli.py status --app-id blurams --platform ios
-python cli.py status --app-id blurams --platform ios --version-name 5.1049.126
-
-# iOS 上传前校验（解析 IPA + 与 ASC 比对，不写入任何数据）
-python cli.py ipa-check --app-id blurams --ipa "F:\upload-test\xxx.ipa"
-
-# 三 App 对照（本地配置；加 --status 查正式版）
-python cli.py apps
-python cli.py apps --status
-
-# 正式版提审后盯盘（变化/心跳 → 飞书私聊；不自动上线）
-python cli.py watch --app-id easelife --platform android --version-code 10421 --interval 30 --heartbeat-hours 12 --notify
-
-# 上传并提审正式版（需 --allow-production）
-# 版本说明默认用配置好的默认文案（-General: Bug fixes and system optimizations.），无需每次传
-python cli.py upload-submit --app-id blurams --platform android --artifact D:\build\app.aab --track production --allow-production --notify
-
-# 需要自定义版本说明时再加 --whats-new（可重复传入做多语言）
-python cli.py upload-submit --app-id blurams --platform android --artifact D:\build\app.aab --track production --allow-production --whats-new "修复卡顿，优化连接速度" --notify
-
-# 分阶段发布：正式版默认 5%（可不传 --rollout）；全量请显式 --rollout 100
-python cli.py upload-submit --app-id blurams --platform android --artifact D:\build\app.aab --track production --allow-production --notify
-
-# 显式指定比例，或审核通过后逐级放量（只能递增；100 转全量）
-python cli.py upload-submit --app-id blurams --platform android --artifact D:\build\app.aab --track production --allow-production --rollout 10 --notify
-python cli.py release --app-id blurams --platform android --version-code 1952 --track production --allow-production --rollout 20
-python cli.py release --app-id blurams --platform android --version-code 1952 --track production --allow-production --rollout 100
-
-# 查询状态（可带 --version-code）
-python cli.py status --app-id blurams --platform android --version-code 1952 --notify
+powershell -File .\scripts\windows\install-autostart.ps1
+powershell -File .\scripts\windows\install-serve-healthcheck.ps1
 ```
 
-提审后流程：[docs/AFTER_SUBMIT_WATCH.md](docs/AFTER_SUBMIT_WATCH.md) · 三 App 对照：[docs/ANDROID_APPS.md](docs/ANDROID_APPS.md) · iOS 接入：[docs/IOS_ASC_SETUP.md](docs/IOS_ASC_SETUP.md) · 常驻定时：[docs/SCHEDULE_WATCH.md](docs/SCHEDULE_WATCH.md) · 后续扩展：[docs/ROADMAP_NEXT.md](docs/ROADMAP_NEXT.md)
+停进程并禁用巡检：`powershell -File .\scripts\windows\stop-serve-watch.ps1`  
+卸载自启（含巡检）：`powershell -File .\scripts\windows\uninstall-autostart.ps1`
+
+## CLI 速查
+
+```powershell
+# 多 App 配置/密钥/盯盘覆盖（只读）
+python cli.py apps-ready
+
+# iOS 凭证 / IPA 校验（不写商店）
+python cli.py apple-check --app-id easelife
+python cli.py ipa-check --app-id easelife --ipa "F:\upload-test\xxx.ipa"
+
+# 状态（Android / iOS）
+python cli.py status --app-id easelife --platform android --version-code 10428 --no-notify
+python cli.py status --app-id easelife --platform ios --no-notify
+
+# Android：内部轨上传
+python cli.py upload --app-id easelife --platform android `
+  --artifact "F:\upload-test\xxx.aab" --track internal --notify
+
+# Android：正式版上传并送审（默认约 5% 分批；全量加 --rollout 100）
+python cli.py upload-submit --app-id easelife --platform android `
+  --artifact "F:\upload-test\xxx.aab" `
+  --track production --allow-production --notify
+
+# 或用包装脚本（先 -WhatIf 预览，不写商店）
+powershell -File .\scripts\windows\release-android.ps1 `
+  -AppId easelife -Artifact "F:\upload-test\xxx.aab" -Track production -AllowProduction -WhatIf
+
+# 盯盘：正式版成功后会自动登记；也可手动
+python cli.py watch --app-id easelife --platform android `
+  --version-code <新码> --once --heartbeat-hours 0 --no-notify
+python cli.py watch --app-id easelife --platform ios --once --heartbeat-hours 0 --no-notify
+```
+
+代理：Android / Google 通常走 `HTTP(S)_PROXY`；iOS / ASC 默认直连（`APPLE_USE_PROXY=false`）。
+
 ## 目录结构
 
 ```text
 app/
-  core/service.py      # upload / submit / status 编排
-  stores/apple.py      # App Store Connect
-  stores/google.py     # Google Play
-  feishu/              # 发卡片 + 按钮回调
-  notify/              # 飞书通知
-  schedule/            # 定时轮询
-  main.py              # FastAPI：/feishu/webhook
+  core/           # 编排、盯盘目标、发版文案、就绪检查、rollout
+  stores/         # apple / google / lifecycle / phased / ipa 解析
+  notify/         # 飞书通知（运营向风格 D）
+  schedule/       # serve 内定时轮询
+  feishu/         # 发卡片；个人模式下默认无回调按钮
+  main.py         # FastAPI：/health、可选 /feishu/webhook
 cli.py
 config/apps.yaml
-secrets/               # .p8 / Google SA JSON（勿提交）
+scripts/windows/  # serve 启停、开机自启、健康巡检、发版包装
+docs/             # 手册与各 App 说明
+secrets/          # .p8 / Google SA JSON（勿提交）
+data/             # watch_targets.json（本地运行态，勿提交密钥）
 ```
 
-## 商店凭证（与飞书分开）
+## 商店凭证
 
 | 平台 | 需要 |
 |------|------|
-| iOS | App Store Connect API Key（`.p8` + Key ID + Issuer ID），角色需能管理构建/提审 |
-| Android | Play Console 服务账号 JSON，并授予对应应用的发布权限 |
+| iOS | ASC API Key（`.p8` + Key ID + Issuer ID）；角色需能管理构建/提审 |
+| Android | Play Console 服务账号 JSON，并授予对应应用发布权限 |
 
-说明：
+- iOS：`ApiKey_*.p8`（个人）与 `AuthKey_*.p8`（团队）的 JWT `sub` 不同，填错会 401；项目按文件名自动判断。见 [docs/IOS_ASC_SETUP.md](docs/IOS_ASC_SETUP.md)。
+- 同一 Apple 团队多 App 共用一套密钥；不同主体（如 boykeep）在 `apps.yaml` 的 `ios.*` 覆盖。
+- IPA 上传规划走 **ASC Build Upload API**，Windows 可直传，**不依赖 Mac / altool**（尚未接通）。
 
-- iOS 个人密钥（`ApiKey_*.p8`）与团队密钥（`AuthKey_*.p8`）的 JWT `sub` 要求相反，填错恒定 401；本项目自动判断。详见 [docs/IOS_ASC_SETUP.md](docs/IOS_ASC_SETUP.md)。
-- **iOS 凭据按 Apple 开发者团队隔离**：同一公司主体的多个 App 共用一套（如 blurams + easelife）；不同主体各用一套，可在 `apps.yaml` 的 `ios.key_id/issuer_id/private_key_path` 按 App 覆盖，留空则回退 `.env` 全局。
-- Windows 上 iOS 二进制上传通常需转发到 Mac/CI；骨架已预留 `artifact_url` / 远程 runner 扩展点。  
-- 旧项目 `ai_support` 里的 Apple JWT 用于内购查单，**不要直接当上传密钥复用**（权限与用途不同）。
+## 飞书
 
-## 飞书按钮约定
+- **个人模式（当前默认）**：只用发消息 API 私聊 `FEISHU_OWNER_*`；`FEISHU_WEBHOOK_ENABLED=false`；卡片无操作按钮。
+- **给运营切群**：见 [docs/OPS_PERSONAL_ONLY.md](docs/OPS_PERSONAL_ONLY.md)，确认前不要改 `SAFETY_PERSONAL_ONLY`。
+- 可选卡片按钮（仅关闭个人模式且开启回调后）：`app_upload_submit` / `app_status`。
 
-按钮 `value.type`：
+## 文档索引
 
-- `app_upload_submit`：上传并提审  
-- `app_status`：查询状态  
+| 文档 | 内容 |
+|------|------|
+| [SAFE_RUNBOOK.md](docs/SAFE_RUNBOOK.md) | 个人调试零影响现网 |
+| [RELEASE_PLAYBOOK.md](docs/RELEASE_PLAYBOOK.md) | 发版固定命令 |
+| [SCHEDULE_WATCH.md](docs/SCHEDULE_WATCH.md) | serve 常驻盯盘 |
+| [AFTER_SUBMIT_WATCH.md](docs/AFTER_SUBMIT_WATCH.md) | 提审后盯盘 |
+| [MULTI_APP_READY.md](docs/MULTI_APP_READY.md) | 多 App 就绪 |
+| [ANDROID_APPS.md](docs/ANDROID_APPS.md) | Android 多 App |
+| [IOS_ASC_SETUP.md](docs/IOS_ASC_SETUP.md) | iOS 凭据与校验 |
+| [ROADMAP_NEXT.md](docs/ROADMAP_NEXT.md) | 后续扩展 |
 
-字段：`app_id`、`platform`（`ios` / `android` / `both`）
+## 下一步（建议优先级）
 
-## 下一步实现优先级
-
-1. 配好新飞书应用，跑通 `panel` → 点按钮 → 收到 toast + 群消息  
-2. 接通 Google `edits.bundles.upload`（Windows 可先做 Android）  
-3. 接通 Apple 提审/状态 API；上传走 Mac runner  
-4. 完善审核状态枚举映射与失败重试
+1. 接通 iOS **Build Upload API**（Windows 直传 IPA → TestFlight）  
+2. 接通 iOS **提审** API，并与现有 `watch` / 飞书通知对齐  
+3. boykeep：补齐独立 Apple 团队 `.p8` 后跑通 `apps-ready --app-id boykeep`  
+4. 运营化：稳定后再按 OPS 清单评估是否关个人模式、改发群（默认不做）
