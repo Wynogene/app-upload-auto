@@ -13,6 +13,7 @@ from app.core.watch_targets import (
     update_target_fields,
 )
 from app.notify.feishu_notify import Notifier
+from app.stores.google_errors import is_transient_status_failure
 
 _scheduler: BackgroundScheduler | None = None
 _last_fingerprint: dict[str, str] = {}
@@ -21,6 +22,18 @@ _last_fingerprint: dict[str, str] = {}
 def _fingerprint(app_id: str, platform: str, state: str, message: str) -> str:
     # 与 cli watch 保持一致：state|message（避免 serve/cli 格式不一致导致误报）
     return f"{state}|{message}"
+
+
+def _split_fp(fp: str) -> tuple[str, str]:
+    if "|" in fp:
+        state, msg = fp.split("|", 1)
+        return state, msg
+    return fp, ""
+
+
+def _is_transient_fp(fp: str) -> bool:
+    state, msg = _split_fp(fp)
+    return is_transient_status_failure(state=state, message=msg)
 
 
 def poll_review_status_job() -> None:
@@ -48,18 +61,37 @@ def poll_review_status_job() -> None:
         )
         mem_key = f"watch:{key}"
         prev = (target.last_fingerprint if target else "") or _last_fingerprint.get(mem_key, "")
-        if prev != fp:
-            # 首次建档：直接落指纹、不通知
+
+        cur_transient = is_transient_status_failure(
+            state=status.state.value,
+            message=status.message,
+        )
+        if cur_transient:
+            # 代理挂了等瞬时失败：不通知、不覆盖上次真实指纹
+            logger.warning(
+                "watch skip transient status failure key={} msg={}",
+                key,
+                (status.message or "")[:120],
+            )
+        elif prev != fp:
             if not prev:
+                # 首次建档：直接落指纹、不通知
                 _last_fingerprint[mem_key] = fp
                 if target:
                     update_target_fields(key, last_fingerprint=fp)
+            elif _is_transient_fp(prev):
+                # 历史误把代理错误落成指纹：恢复真实状态时静默纠正，不刷屏
+                _last_fingerprint[mem_key] = fp
+                if target:
+                    update_target_fields(key, last_fingerprint=fp)
+                logger.info(
+                    "watch healed transient fingerprint silently key={}",
+                    key,
+                )
             else:
                 changed.append(status)
                 pending_fps.append((mem_key, fp))
-                prev_state, prev_msg = (
-                    prev.split("|", 1) if "|" in prev else (prev, "")
-                )
+                prev_state, prev_msg = _split_fp(prev)
                 from app.core.notify_titles import review_change_notify_title
 
                 change_titles[key] = review_change_notify_title(
@@ -69,7 +101,7 @@ def poll_review_status_job() -> None:
                     current_message=status.message,
                 )
 
-        if target and target.heartbeat_hours > 0:
+        if target and target.heartbeat_hours > 0 and not cur_transient:
             now = time.time()
             elapsed_h = (now - (target.last_heartbeat_at or target.submitted_at)) / 3600.0
             if elapsed_h >= target.heartbeat_hours:
@@ -86,9 +118,21 @@ def poll_review_status_job() -> None:
                 status.state.value,
                 status.message,
             )
+            if is_transient_status_failure(
+                state=status.state.value,
+                message=status.message,
+            ):
+                logger.warning(
+                    "watch skip transient status failure key={} msg={}",
+                    key,
+                    (status.message or "")[:120],
+                )
+                continue
             prev = _last_fingerprint.get(key, "")
             if prev != fp:
                 if not prev:
+                    _last_fingerprint[key] = fp
+                elif _is_transient_fp(prev):
                     _last_fingerprint[key] = fp
                 else:
                     changed.append(status)

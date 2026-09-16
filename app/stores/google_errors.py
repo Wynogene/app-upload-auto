@@ -76,6 +76,33 @@ def format_google_status_error(exc: BaseException) -> str:
     return f"状态查询失败: {_short(str(exc))}"
 
 
+def is_transient_status_failure(
+    *,
+    state: str | None = None,
+    message: str | None = None,
+) -> bool:
+    """盯盘用：代理/网络等瞬时查询失败，不应当成「发布状态变化」通知或落指纹。
+
+    关闭/开启本机代理导致 Play 查不通时，message 会变成这类文案；若照常推送，
+    会出现「比例没变却收到私聊」的误报。
+    """
+    del state  # 仅作扩展点；真实 UNKNOWN 与瞬时失败靠 message 区分
+    msg = (message or "").strip()
+    if not msg:
+        return False
+    markers = (
+        "代理不可用",
+        "网络/代理 SSL",
+        "连接 Google Play API 失败",
+        "状态查询失败:",
+        "盯盘查询失败:",
+    )
+    if any(m in msg for m in markers):
+        return True
+    lower = msg.lower()
+    return any(h in lower for h in _PROXY_REFUSED_HINTS)
+
+
 def _short(text: str, limit: int = 280) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     if len(text) <= limit:
