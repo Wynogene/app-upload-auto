@@ -33,6 +33,8 @@ def poll_review_status_job() -> None:
     changed = []
     heartbeats = []
     change_titles: dict[str, str] = {}
+    # 变化指纹先挂起：飞书发送成功后再落盘，避免「已检测到但通知失败 → 指纹已更新 → 永不重试」
+    pending_fps: list[tuple[str, str]] = []  # (mem_or_disk_key, fingerprint)
 
     # 1) 优先扫已登记的盯盘目标（含 versionCode，prefer production）
     targets_by_key = {t.key: t for t in active_targets()}
@@ -47,12 +49,14 @@ def poll_review_status_job() -> None:
         mem_key = f"watch:{key}"
         prev = (target.last_fingerprint if target else "") or _last_fingerprint.get(mem_key, "")
         if prev != fp:
-            _last_fingerprint[mem_key] = fp
-            if target:
-                update_target_fields(key, last_fingerprint=fp)
-            # 首次建档只记指纹不刷屏；已有 prev 才算变化
-            if prev:
+            # 首次建档：直接落指纹、不通知
+            if not prev:
+                _last_fingerprint[mem_key] = fp
+                if target:
+                    update_target_fields(key, last_fingerprint=fp)
+            else:
                 changed.append(status)
+                pending_fps.append((mem_key, fp))
                 prev_state, prev_msg = (
                     prev.split("|", 1) if "|" in prev else (prev, "")
                 )
@@ -82,11 +86,13 @@ def poll_review_status_job() -> None:
                 status.state.value,
                 status.message,
             )
-            if _last_fingerprint.get(key) != fp:
-                prev = _last_fingerprint.get(key, "")
-                _last_fingerprint[key] = fp
-                if prev:
+            prev = _last_fingerprint.get(key, "")
+            if prev != fp:
+                if not prev:
+                    _last_fingerprint[key] = fp
+                else:
                     changed.append(status)
+                    pending_fps.append((key, fp))
 
     if changed:
         logger.info("review status changed: {} items", len(changed))
@@ -99,8 +105,17 @@ def poll_review_status_job() -> None:
                 title=title,
                 footer=console_hints_for([s.platform.value for s in changed]),
             )
+            # 通知成功后再提交指纹
+            for mem_key, fp in pending_fps:
+                _last_fingerprint[mem_key] = fp
+                if mem_key.startswith("watch:"):
+                    disk_key = mem_key[len("watch:") :]
+                    if disk_key in targets_by_key:
+                        update_target_fields(disk_key, last_fingerprint=fp)
         except Exception:  # noqa: BLE001
-            logger.exception("notify review status failed")
+            logger.exception(
+                "notify review status failed; fingerprints NOT advanced (will retry)"
+            )
 
     if heartbeats:
         logger.info("review heartbeat: {} items", len(heartbeats))

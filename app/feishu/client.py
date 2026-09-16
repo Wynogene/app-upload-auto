@@ -21,6 +21,14 @@ class FeishuClient:
     def _settings(self):
         return get_settings()
 
+    def _http(self) -> httpx.Client:
+        """飞书默认直连（trust_env=False），避免被系统 HTTP_PROXY=127.0.0.1:7892 拖死。
+
+        需要走代理时设 FEISHU_USE_PROXY=true。
+        """
+        settings = self._settings()
+        return httpx.Client(timeout=20, trust_env=bool(settings.feishu_use_proxy))
+
     def get_tenant_access_token(self) -> str:
         settings = self._settings()
         if not settings.feishu_app_id or not settings.feishu_app_secret:
@@ -28,7 +36,7 @@ class FeishuClient:
         if self._token and time.time() < self._expire_at - 60:
             return self._token
 
-        with httpx.Client(timeout=20) as client:
+        with self._http() as client:
             resp = client.post(
                 TOKEN_URL,
                 json={
@@ -105,7 +113,7 @@ class FeishuClient:
             "msg_type": msg_type,
             "content": content if isinstance(content, str) else json.dumps(content, ensure_ascii=False),
         }
-        with httpx.Client(timeout=20) as client:
+        with self._http() as client:
             resp = client.post(
                 f"{MESSAGE_URL}?receive_id_type={receive_id_type}",
                 headers={"Authorization": f"Bearer {token}"},

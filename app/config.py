@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     feishu_owner_open_id: str = ""
     feishu_owner_user_id: str = ""
     feishu_receive_id_type: Literal["open_id", "user_id", "chat_id"] = "open_id"
+    # 飞书 open.feishu.cn 是否走代理。默认 false（直连）；系统 HTTP_PROXY 常指向本机
+    # 7892，代理挂了会导致盯盘已检测到变化但私聊通知失败。
+    feishu_use_proxy: bool = False
 
     apple_key_id: str = ""
     apple_issuer_id: str = ""
