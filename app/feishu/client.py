@@ -130,13 +130,24 @@ class FeishuClient:
                 json=body,
             )
             data = resp.json()
-        logger.info(
-            "feishu send_message type={} id={} => code={} msg={}",
-            receive_id_type,
-            receive_id[:12],
-            data.get("code"),
-            data.get("msg"),
-        )
+        code = data.get("code")
+        msg = data.get("msg")
+        if code not in (0, "0", None):
+            logger.error(
+                "feishu send_message FAILED type={} id={} => code={} msg={}",
+                receive_id_type,
+                receive_id[:12],
+                code,
+                msg,
+            )
+        else:
+            logger.info(
+                "feishu send_message type={} id={} => code={} msg={}",
+                receive_id_type,
+                receive_id[:12],
+                code,
+                msg,
+            )
         return data
 
     @staticmethod

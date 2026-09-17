@@ -103,6 +103,22 @@ def run_upload_submit_job(value: dict, operator_open_id: str | None = None) -> l
     if not app:
         raise ValueError(f"未知 app_id: {app_id}")
 
+    if _truthy(value.get("preview_only")):
+        from app.models import OperationResult
+
+        results = [
+            OperationResult(
+                ok=True,
+                app_id=str(app_id),
+                message="preview_only：已跳过，未下载/上传/写商店",
+            )
+        ]
+        try:
+            Notifier().notify_operation_results(str(app_id), results)
+        except Exception:  # noqa: BLE001
+            logger.exception("notify after preview_only skip failed")
+        return results
+
     service = AppReleaseService()
     notifier = Notifier()
     all_results = []
@@ -206,6 +222,11 @@ def handle_card_action(value: dict, operator_open_id: str | None = None) -> dict
                 return _toast("error", platforms)
             if platforms == [Platform.IOS]:
                 return _toast("error", _IOS_UPLOAD_NOT_READY)
+            if _truthy(value.get("preview_only")):
+                return _toast(
+                    "info",
+                    "此卡为按钮预览：不会下载、不会上传、不会改商店",
+                )
             if not value.get("artifact_path") and not value.get("artifact_url"):
                 return _toast("error", "缺少 artifact_path 或 artifact_url")
 
@@ -284,6 +305,7 @@ def build_submit_card_value(
     version: str | None = None,
     track: str = _DEFAULT_CARD_TRACK,
     allow_production: bool = False,
+    preview_only: bool = False,
 ) -> dict[str, Any]:
     """Build contract-compatible button value for debug cards / CLI."""
     value: dict[str, Any] = {
@@ -302,4 +324,6 @@ def build_submit_card_value(
         value["version"] = version
     if allow_production:
         value["allow_production"] = True
+    if preview_only:
+        value["preview_only"] = True
     return value

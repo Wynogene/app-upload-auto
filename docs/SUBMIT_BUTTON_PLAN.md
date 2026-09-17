@@ -76,13 +76,16 @@ python cli.py card-run --app-id easelife --platform android --artifact "F:\uploa
 
 ### 阶段 B — 可选桥接（仍可不改 ai_support 仓库）
 
+**完整安全方案（零影响现网/正式轨）：** [PHASE_B_SAFE.md](./PHASE_B_SAFE.md)
+
+摘要：拆成 B0（契约/预览）→ B1（CLI + dry，主路径）→ B2（独立调试应用点按钮）。  
+无更高 versionCode 包时**禁止真上传**；禁止改现网事件 URL、禁止 production。
+
 若暂时要用「现网已发出的版本链接」做人肉联调：
 
 - 运营把链接/字段贴给你，或你本地组 `value` JSON
-- 调 CLI / `POST` 本机 `serve` 的内部调试接口（若增加）  
+- 调 CLI；先 `--dry-resolve`
 - **不**把现网机器人回调指到本机
-
-（若未来有人在 **ai_support 机器上临时**加代理脚本，也应是独立文件、不进对方主分支——默认不做。）
 
 ### 阶段 C — 合并窗口（唯一允许改 ai_support 的阶段）
 

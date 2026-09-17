@@ -354,12 +354,12 @@ class AppleStoreClient(StoreClient):
             )
 
         return OperationResult(
-            ok=True,
+            ok=False,
             app_id=req.app_id,
             platform=Platform.IOS,
             message=(
-                "上传前校验通过。"
-                "（Build Upload API 尚未接入，下一步将真正上传到 TestFlight）\n"
+                "上传前校验已通过，但 Build Upload API 尚未接入，"
+                "本次未上传到 TestFlight（真实失败，非假成功）。\n"
                 f"{pre.get('message')}"
             ),
             details=base_details,
@@ -447,13 +447,14 @@ class AppleStoreClient(StoreClient):
         )
 
         return OperationResult(
-            ok=True,
+            ok=False,
             app_id=req.app_id,
             platform=Platform.IOS,
-            review_state=ReviewState.WAITING_FOR_REVIEW,
+            review_state=ReviewState.UNKNOWN,
             message=(
-                "iOS 提审骨架已就绪（待接入 reviewSubmissions API）。"
-                f"将写入 what's New{source_note}："
+                "iOS 提审未执行：reviewSubmissions API 尚未接入"
+                "（真实失败，非假成功）。"
+                f"已解析 what's New{source_note}："
                 f"默认语言={primary_locale}；{notes_preview}"
             ),
             details={

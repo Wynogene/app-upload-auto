@@ -767,7 +767,13 @@ def ios_whats_new_cmd(
     "--with-callbacks",
     is_flag=True,
     default=False,
-    help="附带可点按钮（需 FEISHU_ENABLE_CARD_CALLBACKS=true + 本机 webhook；勿改现网事件 URL）",
+    help="附带可点按钮（需 FEISHU_ENABLE_CARD_CALLBACKS=true；勿改现网事件 URL）",
+)
+@click.option(
+    "--preview-only",
+    is_flag=True,
+    default=False,
+    help="按钮仅供预览：即使被点击也不会上传/写商店",
 )
 @click.option("--note", default="", help="卡片附加说明")
 def submit_card(
@@ -780,6 +786,7 @@ def submit_card(
     track: str,
     allow_production: bool,
     with_callbacks: bool,
+    preview_only: bool,
     note: str,
 ) -> None:
     """私聊本人一张提审调试卡（不写商店）。默认无按钮；用 card-run 真正执行。"""
@@ -797,7 +804,7 @@ def submit_card(
     if with_callbacks:
         if not settings.feishu_enable_card_callbacks:
             raise click.ClickException(
-                "--with-callbacks 需要 .env 中 FEISHU_ENABLE_CARD_CALLBACKS=true"
+                "--with-callbacks 需要本进程 FEISHU_ENABLE_CARD_CALLBACKS=true"
             )
         if not settings.feishu_webhook_enabled:
             click.echo(
@@ -817,6 +824,7 @@ def submit_card(
         version=version,
         track=track,
         allow_production=allow_production,
+        preview_only=preview_only,
     )
     result = Notifier().send_submit_debug_card(
         value, note=note, with_callbacks=with_callbacks

@@ -143,7 +143,8 @@ data/             # watch_targets.json（本地运行态，勿提交密钥）
 | [AI_SUPPORT_INTEGRATION_CONTRACT.md](docs/AI_SUPPORT_INTEGRATION_CONTRACT.md) | 日后并入 ai_support 的字段契约（**不改对方仓库**） |
 | [SUBMIT_BUTTON_PLAN.md](docs/SUBMIT_BUTTON_PLAN.md) | 「提审」按钮接入方案（修订版） |
 
-安全调试 CLI：`submit-card`（仅私聊说明）/ `card-run --dry-resolve`（只选型）/ `card-run --track internal`（测轨上传）。详见 SAFE_RUNBOOK。
+安全调试 CLI：`submit-card`（仅私聊说明）/ `card-run --dry-resolve`（只选型）/ `card-run --track internal`（测轨上传）。详见 SAFE_RUNBOOK。  
+阶段 B（人肉/本机联调且不影响现网）：[PHASE_B_SAFE.md](docs/PHASE_B_SAFE.md)。
 
 ## 下一步（建议优先级）
 

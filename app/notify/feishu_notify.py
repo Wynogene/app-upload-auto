@@ -2,11 +2,20 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from loguru import logger
+
 from app.config import get_settings, resolve_notify_target, resolve_notify_targets
 from app.feishu.client import FeishuClient, action_buttons_for_app
 from app.models import OperationResult, ReviewStatus
 
 NotifyAudience = Literal["ops", "debug"]
+
+
+def _feishu_send_ok(data: dict[str, Any] | None) -> bool:
+    if not data:
+        return False
+    code = data.get("code")
+    return code in (0, "0", None)
 
 
 class Notifier:
@@ -28,6 +37,48 @@ class Notifier:
             return action_buttons_for_app(app_id)
         return None
 
+    def _alert_owner_delivery_issues(
+        self,
+        *,
+        original_title: str,
+        failed: list[tuple[str, str, dict[str, Any]]],
+        succeeded: list[tuple[str, str]],
+    ) -> None:
+        """私聊 OWNER：正式通知有人没送到。不再递归告警。"""
+        lines = [
+            f"原通知标题：`{original_title}`",
+            f"成功 {len(succeeded)} / 失败 {len(failed)}",
+            "",
+            "**失败收件人：**",
+        ]
+        for id_type, receive_id, data in failed:
+            lines.append(
+                f"- `{id_type}` `{receive_id}` → code=`{data.get('code')}` "
+                f"{data.get('msg') or ''}"
+            )
+        if succeeded:
+            lines.append("")
+            lines.append("**已成功：**")
+            for id_type, receive_id in succeeded:
+                lines.append(f"- `{id_type}` `{receive_id}`")
+        lines.append("")
+        lines.append(
+            "常见原因：应用可用范围未包含该用户，或对方尚未与机器人建立会话"
+            "（飞书 `230013 Bot has NO availability`）。"
+        )
+        try:
+            self._send_interactive_all(
+                app_id=None,
+                title="[个人调试] 飞书通知部分失败",
+                markdown="\n".join(lines),
+                buttons=None,
+                template="red",
+                audience="debug",
+                alert_owner_on_failure=False,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("failed to alert OWNER about partial Feishu delivery")
+
     def _send_interactive_all(
         self,
         *,
@@ -38,11 +89,18 @@ class Notifier:
         template: str = "blue",
         force_callbacks: bool = False,
         audience: NotifyAudience = "ops",
+        alert_owner_on_failure: bool = True,
     ) -> dict[str, Any]:
-        """Fan-out interactive card to ops/debug user_id list (or chat when not personal-only)."""
+        """Fan-out interactive card to ops/debug user_id list (or chat when not personal-only).
+
+        正式名单部分失败时私聊 OWNER；若全部失败则抛错（便于盯盘不落指纹、可重试）。
+        """
         last: dict[str, Any] = {}
+        succeeded: list[tuple[str, str]] = []
+        failed: list[tuple[str, str, dict[str, Any]]] = []
+
         for id_type, receive_id in self._targets(app_id, audience=audience):
-            last = self.client.send_interactive(
+            data = self.client.send_interactive(
                 receive_id=receive_id,
                 receive_id_type=id_type,
                 title=title,
@@ -51,6 +109,25 @@ class Notifier:
                 template=template,
                 force_callbacks=force_callbacks,
             )
+            last = data
+            if _feishu_send_ok(data):
+                succeeded.append((id_type, receive_id))
+            else:
+                failed.append((id_type, receive_id, data))
+
+        if failed and alert_owner_on_failure and audience == "ops":
+            self._alert_owner_delivery_issues(
+                original_title=title,
+                failed=failed,
+                succeeded=succeeded,
+            )
+
+        if failed and not succeeded:
+            detail = "; ".join(
+                f"{rid}:{d.get('code')}:{d.get('msg')}" for _, rid, d in failed
+            )
+            raise RuntimeError(f"飞书通知全部失败: {detail}")
+
         return last
 
     def send_app_panel(self, app_id: str, note: str = "") -> dict:
@@ -186,6 +263,8 @@ class Notifier:
             lines.append(f"- whats_new: {value.get('whats_new')}")
         if value.get("version"):
             lines.append(f"- version: `{value.get('version')}`")
+        if value.get("preview_only"):
+            lines.append("- **preview_only: true（点提审也不会写商店）**")
         lines.append("")
         lines.append(
             "本机执行（推荐，不依赖飞书回调）:\n"

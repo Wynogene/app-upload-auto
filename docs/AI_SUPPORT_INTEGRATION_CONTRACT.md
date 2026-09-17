@@ -4,6 +4,34 @@
 > 本文只约束 **本仓库** 的对外接口与字段，方便以后整包迁入时接线。  
 > `ai_support` 侧的发卡 / webhook 改动留到合并阶段再做。
 
+## 产品约定（2026-09-17 确认）
+
+| # | 约定 |
+|---|------|
+| 1 | **现网「提审」默认 `track=production`**（及 `allow_production=true`）；**仅调试**走 internal 等测试轨 |
+| 2 | **操作结果通知**：跟 ai_support 发卡目标一致（同一群或同一批人）。**盯盘通知**：发往配置的 **user_id 名单**（如 `FEISHU_NOTIFY_USER_IDS`），与发卡群可分离 |
+| 3 | **包下载**：优先复用 ai_support 群晖分享下载（见下文）；失败再回退本包 HTTP 下载 |
+| 4 | **iOS 现网点提审**：走真实代码路径；成功/失败/报错均如实返回。**禁止假成功**（API 未接通时必须 `ok=false` 并说明原因） |
+
+调试期本仓库卡片默认仍为 `internal` + `SAFETY_PERSONAL_ONLY`，与现网约定分离，合并时用「环境/开关」区分。
+
+### 版本链接形态（已确认样例）
+
+现网「版本链接」为内网群晖分享预览页（公网/蜂窝不可达），例如：
+
+```text
+http://delivery.vaas.plus:5000/sharing/<share_id>
+```
+
+| 平台 | 样例 share_id | 说明 |
+|------|---------------|------|
+| Android | `vfi0NZKyl` | 与 iOS **不是同一分享**，内容为 Android 包（aab/zip 等） |
+| iOS | `M2e4Glw2K` | 与 Android 分离，内容为 iOS 包（ipa/zip 等） |
+
+解析方式与 ai_support 服务端发布一致：`share_id = delivery_url.rstrip("/").split("/")[-1]`（字母数字）。  
+下载调用：`utils_synology.download_release_package(share_id)`（须在能访问 `delivery.vaas.plus:5000` 的内网进程上执行）。  
+下到本地后再按本包 zip/选型规则选出 `.aab` 或 `.ipa`。
+
 ## 目标
 
 合并后希望做到：
@@ -193,3 +221,4 @@ def on_submit_button(value: dict, operator_open_id: str | None):
 |------|------|
 | 2026-09-17 | 首版：字段表、zip 规则、联调方式；明确不改 ai_support |
 | 2026-09-17 | 补充安全 CLI：`submit-card` / `card-run`，默认 internal |
+| 2026-09-17 | 产品约定：现网 production；通知分流；群晖分享下载；iOS 禁止假成功 |
