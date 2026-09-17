@@ -28,10 +28,10 @@
 
 1. `copy .env.example .env`  
 2. 填入现有应用的 `FEISHU_APP_ID` / `FEISHU_APP_SECRET`（只读使用，不要在开放平台改订阅）  
-3. 填本人 ID（二选一）  
-   - 有 `ou_...` → `FEISHU_OWNER_OPEN_ID=ou_...`（推荐）  
-   - 只有企业 uid（如 `50000000`）→ `FEISHU_OWNER_USER_ID=50000000`  
-   - 注意：口头说的「飞书 uid」通常是 **user_id**，不是 open_id  
+3. 填本人与正式通知名单（一律企业 **user_id**）  
+   - 调试只发给你：`FEISHU_OWNER_USER_ID=56798dag`  
+   - 正式盯盘/传包/提审/审核：`FEISHU_NOTIFY_USER_IDS=c59ce84g,56798dag`  
+   - 口头「飞书 uid」即 user_id；发消息不再使用 open_id  
 4. 保持：
 
 ```env
@@ -64,6 +64,21 @@ python cli.py upload-submit --app-id blurams --platform android --artifact D:\bu
 serve 巡检 / 切群清单（默认勿切群）：[OPS_PERSONAL_ONLY.md](./OPS_PERSONAL_ONLY.md)。
 
 `panel` 在个人模式下会发**无回调按钮**的卡片到你私聊，仅作展示。
+
+### 提审调试卡（安全默认 internal）
+
+```powershell
+# 只选型，不写商店
+python cli.py card-run --app-id easelife --platform android --artifact "F:\upload-test\pkg.zip" --dry-resolve
+
+# 私聊说明卡（不写商店；默认无按钮）
+python cli.py submit-card --app-id easelife --platform android --artifact "F:\upload-test\app.aab" --track internal
+
+# 上传到 Play internal（测试轨）
+python cli.py card-run --app-id easelife --platform android --artifact "F:\upload-test\app.aab" --track internal
+```
+
+正式轨必须显式 `--track production --allow-production`。详见 [SUBMIT_BUTTON_PLAN.md](./SUBMIT_BUTTON_PLAN.md)。
 
 ## 产物隔离清单
 

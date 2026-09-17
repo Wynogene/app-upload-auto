@@ -107,7 +107,7 @@ def run() -> None:
     setup_logging()
     if settings.safety_personal_only:
         logger.warning(
-            "以个人调试模式启动：消息仅发往 FEISHU_OWNER_OPEN_ID；"
+            "以个人调试模式启动：正式通知→FEISHU_NOTIFY_USER_IDS，调试→FEISHU_OWNER_USER_ID；"
             "请勿修改现网飞书事件订阅 URL"
         )
     uvicorn.run("app.main:app", host=settings.host, port=settings.port, reload=False)

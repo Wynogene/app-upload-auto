@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import httpx
 import jwt
@@ -745,3 +746,161 @@ class AppleStoreClient(StoreClient):
                     }
                 )
             return out
+
+    def resolve_version_for_whats_new(
+        self,
+        app_cfg: dict,
+        *,
+        version_name: str | None = None,
+    ) -> dict[str, Any]:
+        """解析要对哪个 appStoreVersion 补全 what's New（只读）。
+
+        优先 ``version_name``；否则取最新一条仍可编辑元数据的版本。
+        """
+        from app.stores.apple_whats_new import EDITABLE_VERSION_STATES
+
+        ios = app_cfg.get("ios") or {}
+        app_store_app_id = ios.get("app_store_app_id")
+        if not app_store_app_id:
+            return {"ok": False, "message": "apps.yaml 缺少 ios.app_store_app_id"}
+
+        params: dict[str, Any] = {
+            "limit": 20,
+            "filter[platform]": "IOS",
+            "fields[appStoreVersions]": (
+                "versionString,appStoreState,appVersionState,createdDate,platform"
+            ),
+        }
+        if version_name:
+            params["filter[versionString]"] = version_name
+
+        with self._client() as client:
+            resp = client.get(
+                f"{ASC_BASE}/v1/apps/{app_store_app_id}/appStoreVersions",
+                params=params,
+                headers=self._headers(app_cfg),
+            )
+        if resp.status_code >= 400:
+            return {
+                "ok": False,
+                "message": f"列出版本失败 HTTP {resp.status_code}",
+                "raw": resp.text[:400],
+            }
+
+        versions = []
+        for v in resp.json().get("data") or []:
+            attrs = v.get("attributes") or {}
+            raw_state = pick_version_state(attrs)
+            versions.append(
+                {
+                    "id": v.get("id"),
+                    "version_string": attrs.get("versionString"),
+                    "state": raw_state,
+                    "state_label": describe_version_state(raw_state),
+                    "created_date": attrs.get("createdDate"),
+                    "editable": (raw_state or "").upper() in EDITABLE_VERSION_STATES,
+                }
+            )
+        versions.sort(key=lambda x: x.get("created_date") or "", reverse=True)
+
+        if not versions:
+            hint = f" versionString={version_name}" if version_name else ""
+            return {"ok": False, "message": f"未找到 iOS 版本{hint}", "versions": []}
+
+        if version_name:
+            chosen = versions[0]
+        else:
+            chosen = next((x for x in versions if x.get("editable")), versions[0])
+
+        return {
+            "ok": True,
+            "app_store_app_id": app_store_app_id,
+            "version": chosen,
+            "versions": versions,
+        }
+
+    def list_version_localizations(
+        self,
+        app_cfg: dict,
+        version_id: str,
+    ) -> dict[str, Any]:
+        """列出该版本**已存在**的本地化（不创建任何语言）。"""
+        from app.stores.apple_whats_new import parse_localization_rows
+
+        with self._client() as client:
+            resp = client.get(
+                f"{ASC_BASE}/v1/appStoreVersions/{version_id}/appStoreVersionLocalizations",
+                params={
+                    "limit": 200,
+                    "fields[appStoreVersionLocalizations]": "locale,whatsNew",
+                },
+                headers=self._headers(app_cfg),
+            )
+        if resp.status_code >= 400:
+            return {
+                "ok": False,
+                "message": f"列出本地化失败 HTTP {resp.status_code}",
+                "raw": resp.text[:400],
+            }
+        payload = resp.json()
+        rows = parse_localization_rows(payload)
+        return {
+            "ok": True,
+            "localizations": [
+                {"id": r.id, "locale": r.locale, "whatsNew": r.whats_new} for r in rows
+            ],
+            "count": len(rows),
+        }
+
+    def apply_whats_new_patches(
+        self,
+        app_cfg: dict,
+        patches: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        """对已有 localization id 写入 what's New（不新建语言）。
+
+        ``patches``: [{id, locale, whatsNew}, ...]
+        """
+        results: list[dict[str, Any]] = []
+        with self._client() as client:
+            for item in patches:
+                loc_id = item["id"]
+                text = item["whatsNew"]
+                locale = item.get("locale") or ""
+                resp = client.patch(
+                    f"{ASC_BASE}/v1/appStoreVersionLocalizations/{loc_id}",
+                    headers=self._headers(app_cfg),
+                    json={
+                        "data": {
+                            "type": "appStoreVersionLocalizations",
+                            "id": loc_id,
+                            "attributes": {"whatsNew": text},
+                        }
+                    },
+                )
+                ok = resp.status_code < 400
+                results.append(
+                    {
+                        "id": loc_id,
+                        "locale": locale,
+                        "ok": ok,
+                        "status_code": resp.status_code,
+                        "error": None if ok else resp.text[:300],
+                    }
+                )
+                if ok:
+                    logger.info("apple whatsNew patched locale={} id={}", locale, loc_id)
+                else:
+                    logger.warning(
+                        "apple whatsNew patch failed locale={} HTTP {} {}",
+                        locale,
+                        resp.status_code,
+                        resp.text[:200],
+                    )
+        failed = [r for r in results if not r["ok"]]
+        return {
+            "ok": not failed,
+            "patched": len(results) - len(failed),
+            "failed": len(failed),
+            "results": results,
+        }

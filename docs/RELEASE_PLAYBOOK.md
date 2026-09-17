@@ -84,6 +84,8 @@ python cli.py watch --app-id easelife --platform android `
 
 ```powershell
 python cli.py ipa-check --app-id blurams --ipa "F:\upload-test\xxx.ipa"   # 只读校验
+python cli.py ios-whats-new --app-id blurams                              # 提审前预览补全 what's New（默认不写）
+# python cli.py ios-whats-new --app-id blurams --version 5.1049.126 --apply  # 确认后再写
 python cli.py status --app-id blurams --platform ios --no-notify
 python cli.py watch --app-id blurams --platform ios --once --heartbeat-hours 0 --no-notify
 ```

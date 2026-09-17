@@ -186,10 +186,30 @@ python cli.py watch --app-id easelife --platform ios --once --heartbeat-hours 0
 - [ ] IPA 已 `ipa-check` 通过（bundle id / 版本递增 / 构建号未占用）
 - [ ] ASC 上该版本：**过审后自动发布 + 已开 7 天分批**（本项目默认；勿只开自动、忘开分批）
 - [ ] 挂版本目标构建已明确（本次上传 build / 指定构建号），不会误挂同大版本的旧包
-- [ ] what's New 语言与文案已确认（默认与 Android 一致）
+- [ ] what's New：各**已有本地化**已填（可用 `python cli.py ios-whats-new --app-id <app>` 预览，确认后再 `--apply`）
 - [ ] 出口合规等元数据已填，避免卡在审核
 - [ ] 盯盘已挂上（`watch` 或 serve），飞书能收到过审/分批变化
 - [ ] 明白：本工具不代点「发布给全部用户」
+
+---
+
+### 提审前补全 what's New（已实现，默认不写商店）
+
+ASC 要求：**该版本上已存在的每一种本地化**都要有非空 what's New，否则无法点提审。  
+本工具只处理**已有本地化行**，**不会**给从未本地化的语言新建语言包。
+
+```powershell
+# 只读预览（默认）：列出已有语言与将写入的文案
+python cli.py ios-whats-new --app-id blurams
+python cli.py ios-whats-new --app-id blurams --version 5.1049.126
+
+# 确认无误后再写入（显式 --apply）
+python cli.py ios-whats-new --app-id blurams --version 5.1049.126 --apply
+```
+
+- 默认文案与 Android 共用（`android.release_notes_default` / `.env`）；可用 `--whats-new` 覆盖  
+- 默认只填**空的** what's New；加 `--force` 才会覆盖已有文案  
+- 版本须处于可编辑状态（如「准备提交」）；不改构建、发布方式、分批，也不自动点提审
 
 ---
 

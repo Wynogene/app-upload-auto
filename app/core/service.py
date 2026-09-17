@@ -43,7 +43,8 @@ def _maybe_register_watch(result: OperationResult, req_track: str | None = None)
     hint = watch_hint_command(app_id, vc, "android")
     logger.info("watch target registered app={} versionCode={}", app_id, vc)
     return (
-        f"已登记盯盘目标 versionCode={vc}。建议立刻执行:\n  {hint}\n"
+        f"已登记盯盘目标 versionCode={vc}（同 App 更旧的正式轨 Android 盯盘会自动停掉）。"
+        f"建议立刻执行:\n  {hint}\n"
         f"（{ANDROID_HINT}）"
     )
 

@@ -563,6 +563,368 @@ def apple_check(app_id: str | None, json_out: bool) -> None:
         raise click.ClickException(str(info.get("message") or "ASC 连通性检查失败"))
 
 
+@cli.command("ios-whats-new")
+@click.option("--app-id", required=True, help="apps.yaml 中的 App id，如 blurams")
+@click.option(
+    "--version",
+    "version_name",
+    default=None,
+    help="营销版本号，如 5.1049.126；省略则选最新可编辑版本",
+)
+@click.option(
+    "--whats-new",
+    "whats_new",
+    multiple=True,
+    help="版本说明。可纯文本或 `en-US=文本`；省略则用与 Android 相同的默认文案",
+)
+@click.option(
+    "--apply",
+    "do_apply",
+    is_flag=True,
+    default=False,
+    help="真正写入 ASC。默认只 dry-run 预览，不改商店。",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="连已有 what's New 的语言也覆盖；默认只填空的",
+)
+@click.option("--json-out", "json_out", is_flag=True, default=False)
+def ios_whats_new_cmd(
+    app_id: str,
+    version_name: str | None,
+    whats_new: tuple[str, ...],
+    do_apply: bool,
+    force: bool,
+    json_out: bool,
+) -> None:
+    """提审前：仅为「已存在的」本地化补全 what's New（默认 dry-run）。
+
+    不会新建未本地化的语言；不改构建/发布方式/分批；不自动点提审。
+    """
+    from app.config import get_app_by_id
+    from app.stores.apple import AppleStoreClient
+    from app.stores.apple_whats_new import (
+        LocalizationRow,
+        plan_whats_new_updates,
+        summarize_plan,
+    )
+    from app.stores.release_notes import build_release_notes
+
+    app_cfg = get_app_by_id(app_id)
+    if not app_cfg:
+        raise click.ClickException(f"apps.yaml 中找不到 app id: {app_id}")
+
+    plain, scoped = _split_notes(whats_new)
+    raw: list[str] = []
+    if scoped:
+        for lo, txt in scoped.items():
+            raw.append(f"{lo}={txt}")
+    if plain:
+        raw.append(plain)
+
+    notes, notes_source = build_release_notes(
+        raw or None,
+        app_cfg,
+        platform="ios",
+    )
+    if not notes:
+        raise click.ClickException(
+            "没有可用的版本说明：请传 --whats-new，或配置 "
+            "android.release_notes_default / RELEASE_NOTES_DEFAULT"
+        )
+
+    text_by_locale = {n["language"]: n["text"] for n in notes}
+    fallback_text = next(iter(text_by_locale.values()))
+
+    client = AppleStoreClient()
+    ver = client.resolve_version_for_whats_new(app_cfg, version_name=version_name)
+    if not ver.get("ok"):
+        raise click.ClickException(str(ver.get("message") or "无法解析版本"))
+
+    version = ver["version"]
+    loc = client.list_version_localizations(app_cfg, version["id"])
+    if not loc.get("ok"):
+        raise click.ClickException(str(loc.get("message") or "无法列出本地化"))
+
+    rows = [
+        LocalizationRow(
+            id=str(x["id"]),
+            locale=str(x["locale"]),
+            whats_new=str(x.get("whatsNew") or ""),
+        )
+        for x in loc.get("localizations") or []
+    ]
+    plan = plan_whats_new_updates(
+        rows,
+        text_by_locale=text_by_locale,
+        fallback_text=fallback_text,
+        fill_empty_only=not force,
+    )
+    summary = summarize_plan(plan)
+    to_fill = [p for p in plan if p.action == "fill"]
+
+    report = {
+        "mode": "apply" if do_apply else "dry-run",
+        "app_id": app_id,
+        "version_string": version.get("version_string"),
+        "version_id": version.get("id"),
+        "version_state": version.get("state"),
+        "version_editable": bool(version.get("editable")),
+        "notes_source": notes_source,
+        "fallback_text": fallback_text,
+        "existing_locales": [r.locale for r in rows],
+        "summary": summary,
+        "plan": [
+            {
+                "locale": p.locale,
+                "action": p.action,
+                "current": (p.current[:60] + "…") if len(p.current) > 60 else p.current,
+                "planned": (p.planned[:60] + "…") if len(p.planned) > 60 else p.planned,
+            }
+            for p in plan
+        ],
+    }
+
+    if json_out:
+        click.echo(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        click.echo(
+            f"[{report['mode']}] {app_id} iOS {version.get('version_string')} "
+            f"state={version.get('state')} editable={version.get('editable')}"
+        )
+        click.echo(
+            f"已存在本地化 {len(rows)} 种（不会新建语言）："
+            + (", ".join(r.locale for r in rows) or "(无)")
+        )
+        click.echo(
+            f"文案来源={notes_source}；将填空={summary.get('fill', 0)}；"
+            f"已有跳过={summary.get('skip_has_text', 0)}；"
+            f"相同跳过={summary.get('skip_same', 0)}"
+        )
+        for p in plan:
+            mark = {
+                "fill": "WRITE",
+                "skip_has_text": "skip ",
+                "skip_same": "same ",
+                "skip_no_text": "EMPTY",
+            }.get(p.action, p.action)
+            click.echo(f"  [{mark}] {p.locale}: {(p.current or '(空)')[:40]!r} -> {p.planned[:40]!r}")
+
+    if not do_apply:
+        click.echo(
+            "\n未写入商店（dry-run）。确认无误后加 --apply 才会 PATCH what's New。",
+            err=True,
+        )
+        return
+
+    if not version.get("editable"):
+        raise click.ClickException(
+            f"版本状态 `{version.get('state')}` 通常不可改 what's New，已拒绝写入。"
+            "请换可编辑版本，或到 ASC 确认。"
+        )
+    if not to_fill:
+        click.echo("没有需要写入的语言，已退出。", err=True)
+        return
+
+    patches = [
+        {"id": p.localization_id, "locale": p.locale, "whatsNew": p.planned}
+        for p in to_fill
+    ]
+    applied = client.apply_whats_new_patches(app_cfg, patches)
+    if json_out:
+        click.echo(json.dumps(applied, ensure_ascii=False, indent=2))
+    else:
+        click.echo(
+            f"写入完成：ok={applied.get('ok')} patched={applied.get('patched')} "
+            f"failed={applied.get('failed')}"
+        )
+    if not applied.get("ok"):
+        raise SystemExit(1)
+
+
+@cli.command("submit-card")
+@click.option("--app-id", required=True)
+@click.option("--platform", required=True, type=click.Choice(["ios", "android"]))
+@click.option("--artifact", "artifact_path", default=None, help="本地 AAB/IPA 或 zip 路径")
+@click.option("--artifact-url", default=None, help="包下载链接（可为 zip）")
+@click.option("--whats-new", default=None)
+@click.option("--version", default=None, help="版本号（展示/校验提示）")
+@click.option(
+    "--track",
+    default="internal",
+    show_default=True,
+    help="Android 轨道；调试默认 internal",
+)
+@click.option(
+    "--allow-production",
+    is_flag=True,
+    default=False,
+    help="仅当 track=production 时需要显式打开",
+)
+@click.option(
+    "--with-callbacks",
+    is_flag=True,
+    default=False,
+    help="附带可点按钮（需 FEISHU_ENABLE_CARD_CALLBACKS=true + 本机 webhook；勿改现网事件 URL）",
+)
+@click.option("--note", default="", help="卡片附加说明")
+def submit_card(
+    app_id: str,
+    platform: str,
+    artifact_path: str | None,
+    artifact_url: str | None,
+    whats_new: str | None,
+    version: str | None,
+    track: str,
+    allow_production: bool,
+    with_callbacks: bool,
+    note: str,
+) -> None:
+    """私聊本人一张提审调试卡（不写商店）。默认无按钮；用 card-run 真正执行。"""
+    settings = get_settings()
+    if not settings.safety_personal_only:
+        raise click.ClickException(
+            "submit-card 仅允许 SAFETY_PERSONAL_ONLY=true，防止误发业务群"
+        )
+    if not artifact_path and not artifact_url:
+        raise click.ClickException("请提供 --artifact 或 --artifact-url")
+    if track in {"production", "prod"} and not allow_production:
+        raise click.ClickException(
+            "正式轨需同时加 --allow-production；调试请用默认 --track internal"
+        )
+    if with_callbacks:
+        if not settings.feishu_enable_card_callbacks:
+            raise click.ClickException(
+                "--with-callbacks 需要 .env 中 FEISHU_ENABLE_CARD_CALLBACKS=true"
+            )
+        if not settings.feishu_webhook_enabled:
+            click.echo(
+                "[warn] FEISHU_WEBHOOK_ENABLED=false：即使有按钮，点击也不会打到本机。"
+                "若要本地点按，请用独立调试应用 + 本机 serve，且不要改现网事件 URL。",
+                err=True,
+            )
+
+    from app.feishu.actions import build_submit_card_value
+
+    value = build_submit_card_value(
+        app_id=app_id,
+        platform=platform,
+        artifact_path=artifact_path,
+        artifact_url=artifact_url,
+        whats_new=whats_new,
+        version=version,
+        track=track,
+        allow_production=allow_production,
+    )
+    result = Notifier().send_submit_debug_card(
+        value, note=note, with_callbacks=with_callbacks
+    )
+    click.echo(json.dumps({"value": value, "feishu": result}, ensure_ascii=False, indent=2))
+    click.echo(
+        "\n下一步（推荐，不依赖飞书按钮）:\n"
+        f"  python cli.py card-run --app-id {app_id} --platform {platform}"
+        + (f' --artifact "{artifact_path}"' if artifact_path else "")
+        + (f' --artifact-url "{artifact_url}"' if artifact_url else "")
+        + f" --track {track}"
+        + (" --allow-production" if allow_production else "")
+        + (f' --whats-new "{whats_new}"' if whats_new else ""),
+        err=True,
+    )
+
+
+@cli.command("card-run")
+@click.option("--app-id", required=True)
+@click.option("--platform", required=True, type=click.Choice(["ios", "android"]))
+@click.option("--artifact", "artifact_path", default=None)
+@click.option("--artifact-url", default=None)
+@click.option("--whats-new", default=None)
+@click.option("--version", default=None)
+@click.option("--track", default="internal", show_default=True)
+@click.option("--allow-production", is_flag=True, default=False)
+@click.option(
+    "--dry-resolve",
+    is_flag=True,
+    default=False,
+    help="只下载/解压选型，不写商店（最安全自检）",
+)
+def card_run(
+    app_id: str,
+    platform: str,
+    artifact_path: str | None,
+    artifact_url: str | None,
+    whats_new: str | None,
+    version: str | None,
+    track: str,
+    allow_production: bool,
+    dry_resolve: bool,
+) -> None:
+    """按与调试卡相同的契约执行提审（默认同轨 internal）。结果私聊本人。"""
+    if not artifact_path and not artifact_url:
+        raise click.ClickException("请提供 --artifact 或 --artifact-url")
+    if track in {"production", "prod"} and not allow_production:
+        raise click.ClickException("正式轨需 --allow-production；调试请用 --track internal")
+
+    from app.config import get_app_by_id
+    from app.core.artifact_resolve import cleanup_work_dir, resolve_artifact
+    from app.feishu.actions import build_submit_card_value, run_upload_submit_job
+
+    if dry_resolve:
+        app = get_app_by_id(app_id)
+        if not app:
+            raise click.ClickException(f"未知 app_id: {app_id}")
+        plat = _platform(platform)
+        hint = None
+        if plat == Platform.ANDROID:
+            hint = (app.get("android") or {}).get("package_name")
+        else:
+            hint = (app.get("ios") or {}).get("bundle_id")
+        resolved = resolve_artifact(
+            platform=plat,
+            artifact_path=artifact_path,
+            artifact_url=artifact_url,
+            package_or_bundle=hint,
+            version_hint=version,
+        )
+        click.echo(
+            json.dumps(
+                {
+                    "ok": resolved.ok,
+                    "message": resolved.message,
+                    "path": str(resolved.path) if resolved.path else None,
+                    "source": resolved.source,
+                    "candidates": resolved.candidates,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        cleanup_work_dir(resolved.work_dir)
+        if not resolved.ok:
+            raise SystemExit(1)
+        return
+
+    value = build_submit_card_value(
+        app_id=app_id,
+        platform=platform,
+        artifact_path=artifact_path,
+        artifact_url=artifact_url,
+        whats_new=whats_new,
+        version=version,
+        track=track,
+        allow_production=allow_production,
+    )
+    click.echo(
+        f"[card-run] 开始执行 track={track} allow_production={allow_production} …",
+        err=True,
+    )
+    results = run_upload_submit_job(value, operator_open_id=get_settings().feishu_owner_open_id or None)
+    click.echo(json.dumps([r.model_dump() for r in results], ensure_ascii=False, indent=2))
+    if not all(r.ok for r in results):
+        raise SystemExit(1)
+
+
 @cli.command("panel")
 @click.option("--app-id", required=True, help="个人模式下私聊给你一张说明卡片（默认无回调按钮）")
 def panel(app_id: str) -> None:

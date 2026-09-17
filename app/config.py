@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     )
 
     # --- Safety (default: personal-only, zero prod blast radius) ---
-    # true: 只允许发给 FEISHU_OWNER_OPEN_ID；禁止群聊；默认不挂现网 webhook
+    # true: 只允许发给 OWNER + 正式通知 user_id 名单；禁止群聊；默认不挂现网 webhook
     safety_personal_only: bool = True
     # true: 允许启动 /feishu/webhook（仍建议不要改现网事件订阅地址）
     feishu_webhook_enabled: bool = False
@@ -33,11 +33,13 @@ class Settings(BaseSettings):
     feishu_encrypt_key: str = ""
     # 兼容旧字段；personal-only 模式下会被忽略（除非走 resolve 逻辑）
     feishu_default_chat_id: str = ""
-    # 本人标识二选一即可（优先 open_id）
-    # open_id 形如 ou_...；你们口头说的「飞书 uid」多半是 user_id（如 50000000）
-    feishu_owner_open_id: str = ""
+    # 调试消息只发给本人（企业 user_id，如 56798dag）
     feishu_owner_user_id: str = ""
-    feishu_receive_id_type: Literal["open_id", "user_id", "chat_id"] = "open_id"
+    # 正式通知名单（逗号分隔 user_id）：盯盘 / 传包 / 提审 / 审核状态等
+    feishu_notify_user_ids: str = ""
+    # 仅用于飞书卡片回调校验操作者；发消息一律走 user_id
+    feishu_owner_open_id: str = ""
+    feishu_receive_id_type: Literal["open_id", "user_id", "chat_id"] = "user_id"
     # 飞书 open.feishu.cn 是否走代理。默认 false（直连）；系统 HTTP_PROXY 常指向本机
     # 7892，代理挂了会导致盯盘已检测到变化但私聊通知失败。
     feishu_use_proxy: bool = False
@@ -145,28 +147,74 @@ def get_app_by_id(app_id: str) -> dict[str, Any] | None:
 
 
 def resolve_owner_target() -> tuple[str, str]:
-    """Resolve personal owner as (receive_id_type, receive_id)."""
+    """Resolve personal debug owner as (receive_id_type, receive_id). Always user_id."""
     settings = get_settings()
-    if settings.feishu_owner_open_id:
-        return "open_id", settings.feishu_owner_open_id
     if settings.feishu_owner_user_id:
-        return "user_id", settings.feishu_owner_user_id
+        return "user_id", settings.feishu_owner_user_id.strip()
     raise RuntimeError(
-        "请配置 FEISHU_OWNER_OPEN_ID（ou_...）或 FEISHU_OWNER_USER_ID（企业 user_id，如 50000000）"
+        "请配置 FEISHU_OWNER_USER_ID（企业 user_id，调试消息只发给此人）"
     )
 
 
-def resolve_notify_target(app_id: str | None = None) -> tuple[str, str]:
-    """Return (receive_id_type, receive_id) with personal-only hard guard."""
+def parse_user_id_list(raw: str | None = None) -> list[str]:
+    """Parse comma/semicolon-separated user_ids; de-dupe, keep order."""
+    text = get_settings().feishu_notify_user_ids if raw is None else raw
+    seen: set[str] = set()
+    out: list[str] = []
+    for part in (text or "").replace(";", ",").split(","):
+        uid = part.strip()
+        if not uid or uid in seen:
+            continue
+        seen.add(uid)
+        out.append(uid)
+    return out
+
+
+def personal_allowed_user_ids() -> set[str]:
+    """user_id allowlist under SAFETY_PERSONAL_ONLY（调试本人 + 正式名单）。"""
+    settings = get_settings()
+    ids: set[str] = set()
+    if settings.feishu_owner_user_id:
+        ids.add(settings.feishu_owner_user_id.strip())
+    ids.update(parse_user_id_list())
+    return {x for x in ids if x}
+
+
+def resolve_notify_targets(
+    app_id: str | None = None,
+    *,
+    audience: Literal["ops", "debug"] = "ops",
+) -> list[tuple[str, str]]:
+    """Return (receive_id_type, receive_id) list for a notify fan-out.
+
+    personal-only：
+      - debug：仅 FEISHU_OWNER_USER_ID
+      - ops：FEISHU_NOTIFY_USER_IDS（未配则回退本人）
+    非 personal-only：仍可走群 chat_id。
+    """
     settings = get_settings()
     if settings.safety_personal_only:
-        # 强制私聊本人，忽略任何群 chat_id / apps.yaml notify_chat_id
-        return resolve_owner_target()
+        if audience == "debug":
+            return [resolve_owner_target()]
+
+        uids = parse_user_id_list()
+        if not uids:
+            return [resolve_owner_target()]
+        return [("user_id", uid) for uid in uids]
 
     if app_id:
         app = get_app_by_id(app_id)
         if app and app.get("notify_chat_id"):
-            return "chat_id", app["notify_chat_id"]
+            return [("chat_id", app["notify_chat_id"])]
     if settings.feishu_default_chat_id:
-        return settings.feishu_receive_id_type, settings.feishu_default_chat_id
-    return resolve_owner_target()
+        return [(settings.feishu_receive_id_type, settings.feishu_default_chat_id)]
+    return [resolve_owner_target()]
+
+
+def resolve_notify_target(
+    app_id: str | None = None,
+    *,
+    audience: Literal["ops", "debug"] = "ops",
+) -> tuple[str, str]:
+    """Return the primary (receive_id_type, receive_id)."""
+    return resolve_notify_targets(app_id, audience=audience)[0]

@@ -120,6 +120,49 @@ def save_targets(targets: list[WatchTarget]) -> None:
     )
 
 
+def _version_code_int(raw: str | None) -> int | None:
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text or text == "-":
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def _deactivate_older_android_production(
+    targets: list[WatchTarget],
+    *,
+    app_id: str,
+    new_version_code: str,
+) -> list[str]:
+    """Mark older production Android watches inactive. Returns deactivated keys."""
+    new_vc = _version_code_int(new_version_code)
+    if new_vc is None:
+        return []
+    deactivated: list[str] = []
+    for t in targets:
+        if not t.active:
+            continue
+        if t.app_id != app_id or (t.platform or "").lower() != "android":
+            continue
+        track = (t.track or "production").lower()
+        if track not in {"production", "prod"}:
+            continue
+        old_vc = _version_code_int(t.version_code)
+        if old_vc is None or old_vc >= new_vc:
+            continue
+        t.active = False
+        if t.note and "superseded" not in t.note:
+            t.note = f"{t.note}; superseded by {new_version_code}"
+        elif not t.note:
+            t.note = f"superseded by {new_version_code}"
+        deactivated.append(t.key)
+    return deactivated
+
+
 def upsert_target(
     *,
     app_id: str,
@@ -129,6 +172,13 @@ def upsert_target(
     heartbeat_hours: float = 12.0,
     note: str = "",
 ) -> WatchTarget:
+    """Insert or replace a watch target.
+
+    For Android production with a numeric versionCode: also deactivate other
+    active production watches on the same app whose versionCode is strictly older.
+    """
+    from loguru import logger
+
     targets = load_targets()
     target = WatchTarget(
         app_id=app_id,
@@ -154,7 +204,29 @@ def upsert_target(
             break
     if not replaced:
         targets.append(target)
+
+    deactivated: list[str] = []
+    plat = (platform or "").lower()
+    track_l = (target.track or "production").lower()
+    if (
+        plat == "android"
+        and target.version_code
+        and track_l in {"production", "prod"}
+    ):
+        deactivated = _deactivate_older_android_production(
+            targets,
+            app_id=app_id,
+            new_version_code=target.version_code,
+        )
+
     save_targets(targets)
+    if deactivated:
+        logger.info(
+            "watch deactivated older android targets app={} new={} old={}",
+            app_id,
+            target.version_code,
+            deactivated,
+        )
     return target
 
 

@@ -3,7 +3,7 @@ apps:
   - id: blurams
     name: Blurams
     notify_chat_id: ""
-    allowed_open_ids: []  # personal-only 时以 FEISHU_OWNER_OPEN_ID 为准
+    allowed_open_ids: []  # 卡片操作 ACL（可选）；发消息用 FEISHU_*_USER_ID 名单
     ios:
       enabled: true
       bundle_id: com.example.app
