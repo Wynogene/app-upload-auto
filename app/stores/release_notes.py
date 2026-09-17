@@ -16,8 +16,9 @@ from dataclasses import dataclass
 
 from app.config import get_settings
 
-# Google Play 单语言版本说明上限
+# Google Play 单语言版本说明上限；ASC what's New 上限更高
 MAX_CHARS_PER_LOCALE = 500
+MAX_CHARS_PER_LOCALE_IOS = 4000
 
 # 形如 zh-CN=文本 / en-US=文本；左侧是语言标签
 _LOCALE_PREFIX_RE = re.compile(r"^\s*([A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?)\s*=\s*(.*)$", re.S)
@@ -109,11 +110,24 @@ def _looks_like_locale(value: str) -> bool:
 
 
 def _normalize_locale(value: str) -> str:
-    """zh-cn → zh-CN；en → en。Google 要求语言-地区的大小写规范。"""
-    parts = value.strip().split("-")
+    """规范化语言标签：``en-us`` → ``en-US``；``zh-hans`` → ``zh-Hans``（脚本码）。
+
+    Google / ASC 常用 ``语言-地区``（地区 2 字母大写）或 ``语言-脚本``（脚本 4 字母，如 Hans）。
+    """
+    parts = [p for p in value.strip().split("-") if p]
+    if not parts:
+        return value.strip()
     if len(parts) == 1:
         return parts[0].lower()
-    return f"{parts[0].lower()}-{parts[1].upper()}"
+    out = [parts[0].lower()]
+    for part in parts[1:]:
+        if len(part) == 2:
+            out.append(part.upper())
+        elif len(part) == 4 and part.isalpha():
+            out.append(part[0].upper() + part[1:].lower())
+        else:
+            out.append(part)
+    return "-".join(out)
 
 
 def validate_notes(
@@ -121,19 +135,30 @@ def validate_notes(
     *,
     track: str,
     is_production: bool = False,
+    platform: str = "android",
 ) -> list[NotesIssue]:
     """校验版本说明是否满足要求。notes 为 None 表示用户未提供。"""
     issues: list[NotesIssue] = []
+    max_chars = (
+        MAX_CHARS_PER_LOCALE_IOS if platform == "ios" else MAX_CHARS_PER_LOCALE
+    )
+    store_label = "App Store" if platform == "ios" else "Google Play"
+    default_key = (
+        "ios.release_notes_default（可省略，将回退 android.release_notes_default）"
+        if platform == "ios"
+        else "android.release_notes_default"
+    )
 
     if not notes:
-        if is_production or track in {"production"}:
+        if is_production or track in {"production"} or platform == "ios":
             issues.append(
                 NotesIssue(
                     "notes_required",
                     ERROR,
-                    "正式版缺少版本说明：既没有传 --whats-new，也没有配置默认文案。"
-                    "请传 --whats-new \"...\"，或在 apps.yaml 的 android.release_notes_default "
-                    "（或 .env 的 RELEASE_NOTES_DEFAULT）配置运营确认过的默认文案。",
+                    "缺少版本说明：既没有传 --whats-new，也没有配置默认文案。"
+                    f"请传 --whats-new \"...\"，或在 apps.yaml 的 {default_key} "
+                    "（或 .env 的 RELEASE_NOTES_DEFAULT）配置运营确认过的默认文案。"
+                    "iOS 提审默认与 Android 共用同一套文案/语言。",
                 )
             )
         return issues
@@ -156,13 +181,13 @@ def validate_notes(
             issues.append(
                 NotesIssue("notes_empty_text", ERROR, f"语言 `{locale}` 的版本说明为空")
             )
-        elif len(text) > MAX_CHARS_PER_LOCALE:
+        elif len(text) > max_chars:
             issues.append(
                 NotesIssue(
                     "notes_too_long",
                     ERROR,
                     f"语言 `{locale}` 的版本说明 {len(text)} 字符，"
-                    f"超过 Google Play 上限 {MAX_CHARS_PER_LOCALE} 字符",
+                    f"超过 {store_label} 上限 {max_chars} 字符",
                 )
             )
 
@@ -181,14 +206,26 @@ def format_issues(issues: list[NotesIssue]) -> str:
     return "\n".join(lines)
 
 
-def resolve_default_locales(app_cfg: dict | None) -> list[str]:
-    """取默认版本说明语言：apps.yaml > .env > 内置 en-US。"""
-    android = (app_cfg or {}).get("android") or {}
-    configured = android.get("release_notes_locales")
-    if isinstance(configured, list):
-        out = [str(x).strip() for x in configured if str(x).strip()]
-        if out:
-            return out
+def resolve_default_locales(
+    app_cfg: dict | None,
+    *,
+    platform: str = "android",
+) -> list[str]:
+    """取默认版本说明语言：apps.yaml（平台段）> 回退 android > .env > 内置 en-US。
+
+    iOS 提审与 Android 共用同一套默认：未在 ``ios.release_notes_locales`` 覆盖时，
+    自动使用 ``android.release_notes_locales``，保证两边语言一致。
+    """
+    sections = [platform]
+    if platform != "android":
+        sections.append("android")
+    for key in sections:
+        section = (app_cfg or {}).get(key) or {}
+        configured = section.get("release_notes_locales")
+        if isinstance(configured, list):
+            out = [str(x).strip() for x in configured if str(x).strip()]
+            if out:
+                return [_normalize_locale(lo) for lo in out]
     # 全局兜底（.env: RELEASE_NOTES_LOCALES=en-US,zh-CN）
     global_raw = (get_settings().release_notes_locales or "").strip()
     if global_raw:
@@ -198,18 +235,28 @@ def resolve_default_locales(app_cfg: dict | None) -> list[str]:
     return list(DEFAULT_LOCALES)
 
 
-def resolve_default_text(app_cfg: dict | None) -> str | None:
-    """取默认版本说明文案：apps.yaml > .env > 无。
+def resolve_default_text(
+    app_cfg: dict | None,
+    *,
+    platform: str = "android",
+) -> str | None:
+    """取默认版本说明文案：apps.yaml（平台段）> 回退 android > .env > 无。
 
     这是「运营已经确认过的默认文案」，与「工具自己编造」有本质区别：
     必须是显式配置进来的，才会被使用。
     运营手工上传时用的就是这条：
         -General: Bug fixes and system optimizations.
+
+    iOS 提审未单独配置时复用 ``android.release_notes_default``，与 Play 一致。
     """
-    android = (app_cfg or {}).get("android") or {}
-    configured = android.get("release_notes_default")
-    if configured is not None and str(configured).strip():
-        return str(configured).strip()
+    sections = [platform]
+    if platform != "android":
+        sections.append("android")
+    for key in sections:
+        section = (app_cfg or {}).get(key) or {}
+        configured = section.get("release_notes_default")
+        if configured is not None and str(configured).strip():
+            return str(configured).strip()
     global_raw = (get_settings().release_notes_default or "").strip()
     return global_raw or None
 
@@ -221,24 +268,26 @@ DEFAULT = "default"
 def build_release_notes(
     raw_values: list[str] | None,
     app_cfg: dict | None,
+    *,
+    platform: str = "android",
 ) -> tuple[list[dict[str, str]] | None, str | None]:
-    """产出最终要提交的 releaseNotes 与其来源。
+    """产出最终要提交的 releaseNotes / whatsNew 与其来源。
 
     返回 (notes, source)：
       * 用户显式给了 --whats-new            → source="explicit"
       * 未给，但配置了默认文案              → source="default"（套用到默认语言）
       * 都未提供                            → (None, None)，调用方据此决定是否必填
     """
-    notes = parse_notes_spec(raw_values, resolve_default_locales(app_cfg))
+    notes = parse_notes_spec(raw_values, resolve_default_locales(app_cfg, platform=platform))
     if notes:
         return notes, EXPLICIT
 
-    default_text = resolve_default_text(app_cfg)
+    default_text = resolve_default_text(app_cfg, platform=platform)
     if default_text:
         return (
             [
                 {"language": lo, "text": default_text}
-                for lo in resolve_default_locales(app_cfg)
+                for lo in resolve_default_locales(app_cfg, platform=platform)
             ],
             DEFAULT,
         )

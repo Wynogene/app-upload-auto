@@ -26,6 +26,8 @@
 
 优先级：**命令行 `--whats-new` > `apps.yaml` 里该 App 的配置 > `.env` 全局 > 无**
 
+**iOS 提审**：`what's New` 默认语言与文案与上表相同——未在 `ios.release_notes_*` 覆盖时，自动复用该 App 的 `android.release_notes_*`（以及 `.env` 全局）。
+
 | 轨道 | 参数省略时的行为 |
 |------|------------------|
 | `production` | 用配置的默认文案；**若既没传参也没配默认文案，则阻断**（避免版本亮点空白） |

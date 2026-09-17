@@ -54,10 +54,11 @@ class Settings(BaseSettings):
     apple_use_proxy: bool = False
 
     google_play_service_account_json: str = "secrets/google-play-sa-blurams-easelife.json"
-    # 版本说明（releaseNotes）默认值。按 App 可在 apps.yaml 的 android.* 覆盖。
-    # 语言标签须与 Play 商店支持的本地化语言一致；逗号分隔。
+    # 版本说明默认值。按 App 可在 apps.yaml 的 android.* 覆盖；
+    # iOS 提审未在 ios.* 单独配置时回退到 android / 本全局，与 Play 保持一致。
+    # 语言标签须与商店支持的本地化语言一致；逗号分隔。
     release_notes_locales: str = "en-US"
-    # 运营已确认的默认文案（不是工具编造的）。留空则正式版必须显式传 --whats-new。
+    # 运营已确认的默认文案（不是工具编造的）。留空则正式版 / iOS 提审必须显式传 --whats-new。
     release_notes_default: str = ""
     # 正式版未传 --rollout 时的默认分批百分比。留空字符串 = 关闭默认分批（不传即全量）。
     # 可被 apps.yaml 的 android.rollout_percent_default 覆盖。

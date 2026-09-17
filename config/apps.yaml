@@ -3,13 +3,15 @@
 # - boykeep：独立公司主体 → 独立 Play Console + 独立 GCP + 独立 Apple 团队（见 docs/BOYKEEP_ANDROID_SETUP.md、docs/IOS_ASC_SETUP.md）
 # - 安欣看：国内且不再投入，已禁用
 #
-# 版本说明（releaseNotes）：
+# 版本说明（releaseNotes / iOS what's New）：
 # - API 中是可选字段。省略 = 商店不展示版本说明。
 # - 优先用运营在 apps.yaml / .env 配置的「默认文案」（运营手工上传时用的那条），
 #   而不是工具临时编造。
 # - 正式轨道 production 若既没传 --whats-new、也没配默认文案，则会被拦下。
 # - 多语言：--whats-new zh-CN=... --whats-new en-US=...
 # - android.release_notes_locales 决定「纯文本」套用到哪些语言，须与商店支持的本地化语言一致。
+# - iOS 提审默认语言与版本说明：复用同一 App 的 android.release_notes_*（及 .env 全局）；
+#   仅当需要与 Play 不一致时，才在 ios 下单独写 release_notes_locales / release_notes_default。
 #
 # 分阶段发布（仅 production）：
 # - 正式版未传 --rollout 时，默认先放量 android.rollout_percent_default（默认 5%）。

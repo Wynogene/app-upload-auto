@@ -254,8 +254,13 @@ IPA: bundle=com.vitec.easelifeEn version=5.1054.52 build=5.1054.52.1
 | 状态查询 / 盯盘（真实状态映射） | ✅ 已可用 |
 | 上传前校验（`ipa-check`） | ✅ 已可用 |
 | IPA 上传到 TestFlight（Build Upload API） | ⏳ 下一步（**Windows 可直传**，见下） |
-| 提审（`reviewSubmissions` API） | ⏳ 待接入 |
+| 提审（`reviewSubmissions` API） | ⏳ 待接入（what's New 默认语言/文案已与 Android 共用） |
 | boykeep（主体 B）凭据 | ⏳ 待生成 `.p8` 后填入 |
+
+**版本说明：** iOS 提审时 `what's New` 默认语言与文案复用该 App 的
+`android.release_notes_locales` / `android.release_notes_default`（及 `.env` 全局）；
+仅当需要与 Play 不一致时，才在 `ios` 下单独配置同名项。可用
+`--whats-new` 覆盖。提审 API 接通后会按此写入 ASC localization。
 
 关于 IPA 上传：已实测 `POST /v1/buildUploads` 允许 `CREATE`
 （Apple 返回 *Allowed operations are: CREATE, DELETE, GET_INSTANCE*），

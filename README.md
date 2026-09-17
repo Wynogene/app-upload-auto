@@ -133,6 +133,7 @@ data/             # watch_targets.json（本地运行态，勿提交密钥）
 |------|------|
 | [SAFE_RUNBOOK.md](docs/SAFE_RUNBOOK.md) | 个人调试零影响现网 |
 | [RELEASE_PLAYBOOK.md](docs/RELEASE_PLAYBOOK.md) | 发版固定命令 |
+| [IOS_RELEASE.md](docs/IOS_RELEASE.md) | iOS 传包→提审→分发全流程与坑点（上线前必读） |
 | [SCHEDULE_WATCH.md](docs/SCHEDULE_WATCH.md) | serve 常驻盯盘 |
 | [AFTER_SUBMIT_WATCH.md](docs/AFTER_SUBMIT_WATCH.md) | 提审后盯盘 |
 | [MULTI_APP_READY.md](docs/MULTI_APP_READY.md) | 多 App 就绪 |

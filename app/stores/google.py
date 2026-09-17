@@ -49,6 +49,68 @@ def _normalize_track(track: str) -> str:
     return "production" if t == "prod" else t
 
 
+def _format_mib(num_bytes: int | float) -> str:
+    return f"{float(num_bytes) / (1024 * 1024):.1f}"
+
+
+def execute_resumable_media_upload(
+    request: Any,
+    *,
+    total_size: int,
+    label: str = "bundle",
+    num_retries: int = 5,
+) -> Any:
+    """执行可续传媒体上传，并按已传 MB（兼百分比）打进度日志。
+
+    googleapiclient 的 ``.execute()`` 不会回调进度；大 AAB 需 ``next_chunk`` 循环。
+    """
+    total = max(int(total_size or 0), 0)
+    total_note = _format_mib(total) if total else "?"
+    logger.info(
+        "google.{} upload start: {} MB (chunked resumable)",
+        label,
+        total_note,
+    )
+    response = None
+    last_logged_bytes = -1
+    # 至少每约 8MiB 打一条，避免刷屏；收尾必打
+    log_every = 8 * 1024 * 1024
+    while response is None:
+        progress, response = request.next_chunk(num_retries=num_retries)
+        if progress is None:
+            continue
+        done = int(getattr(progress, "resumable_progress", 0) or 0)
+        known_total = int(getattr(progress, "total_size", 0) or 0) or total
+        if known_total and total != known_total:
+            total = known_total
+            total_note = _format_mib(total)
+        should_log = (
+            done >= total > 0
+            or last_logged_bytes < 0
+            or (done - last_logged_bytes) >= log_every
+        )
+        if not should_log:
+            continue
+        last_logged_bytes = done
+        if total > 0:
+            pct = min(100.0, 100.0 * done / total)
+            logger.info(
+                "google.{} upload progress: {}/{} MB ({:.0f}%)",
+                label,
+                _format_mib(done),
+                total_note,
+                pct,
+            )
+        else:
+            logger.info(
+                "google.{} upload progress: {} MB",
+                label,
+                _format_mib(done),
+            )
+    logger.info("google.{} upload complete: {} MB", label, total_note)
+    return response
+
+
 def _map_release_status(status: str | None, track: str) -> ReviewState:
     s = (status or "").lower()
     if s == "draft":
@@ -494,8 +556,9 @@ class GoogleStoreClient(StoreClient):
                 chunksize=8 * 1024 * 1024,
             )
             upload_retries = 5
+            artifact_size = aab_path.stat().st_size
             if aab_path.suffix.lower() == ".aab":
-                bundle = (
+                upload_req = (
                     service.edits()
                     .bundles()
                     .upload(
@@ -503,12 +566,17 @@ class GoogleStoreClient(StoreClient):
                         editId=edit_id,
                         media_body=media,
                     )
-                    .execute(num_retries=upload_retries)
+                )
+                bundle = execute_resumable_media_upload(
+                    upload_req,
+                    total_size=artifact_size,
+                    label="aab",
+                    num_retries=upload_retries,
                 )
                 version_code = bundle.get("versionCode")
                 upload_kind = "aab"
             else:
-                apk = (
+                upload_req = (
                     service.edits()
                     .apks()
                     .upload(
@@ -516,7 +584,12 @@ class GoogleStoreClient(StoreClient):
                         editId=edit_id,
                         media_body=media,
                     )
-                    .execute(num_retries=upload_retries)
+                )
+                apk = execute_resumable_media_upload(
+                    upload_req,
+                    total_size=artifact_size,
+                    label="apk",
+                    num_retries=upload_retries,
                 )
                 version_code = apk.get("versionCode")
                 upload_kind = "apk"

@@ -370,7 +370,7 @@ class AppleStoreClient(StoreClient):
         Real flow (to implement):
         - find/create appStoreVersions
         - attach build
-        - set whatsNew localization
+        - set whatsNew localization（默认语言/文案与 Android 共用，见 release_notes）
         - POST reviewSubmissions + reviewSubmissionItems
         - PATCH submitted=true
         """
@@ -389,13 +389,78 @@ class AppleStoreClient(StoreClient):
                 platform=Platform.IOS,
                 message="apps.yaml 缺少 ios.app_store_app_id",
             )
+
+        from app.stores.release_notes import (
+            build_release_notes,
+            format_issues,
+            has_errors,
+            validate_notes,
+        )
+
+        raw: list[str] = []
+        for locale, text in (req.release_notes or {}).items():
+            raw.append(f"{locale}={text}")
+        if req.whats_new:
+            raw.append(req.whats_new)
+
+        try:
+            notes, notes_source = build_release_notes(
+                raw or None,
+                app_cfg,
+                platform="ios",
+            )
+        except Exception as exc:  # noqa: BLE001 — NotesSpecError 等
+            return OperationResult(
+                ok=False,
+                app_id=req.app_id,
+                platform=Platform.IOS,
+                message=f"版本说明格式有误：{exc}",
+                details={"app_store_app_id": app_store_app_id},
+            )
+
+        issues = validate_notes(
+            notes,
+            track="production",
+            is_production=True,
+            platform="ios",
+        )
+        if has_errors(issues):
+            return OperationResult(
+                ok=False,
+                app_id=req.app_id,
+                platform=Platform.IOS,
+                message=f"版本说明校验未通过：\n{format_issues(issues)}",
+                details={"app_store_app_id": app_store_app_id},
+            )
+
+        primary_locale = (notes or [{}])[0].get("language") if notes else None
+        notes_preview = "; ".join(
+            f"{n.get('language')}={(n.get('text') or '')[:80]}" for n in (notes or [])
+        )
+        source_note = (
+            "（与 Android 共用默认配置）"
+            if notes_source == "default"
+            else "（命令行 --whats-new）"
+            if notes_source == "explicit"
+            else ""
+        )
+
         return OperationResult(
             ok=True,
             app_id=req.app_id,
             platform=Platform.IOS,
             review_state=ReviewState.WAITING_FOR_REVIEW,
-            message="iOS 提审骨架已就绪（待接入 reviewSubmissions API）",
-            details={"app_store_app_id": app_store_app_id},
+            message=(
+                "iOS 提审骨架已就绪（待接入 reviewSubmissions API）。"
+                f"将写入 what's New{source_note}："
+                f"默认语言={primary_locale}；{notes_preview}"
+            ),
+            details={
+                "app_store_app_id": app_store_app_id,
+                "release_notes": notes,
+                "release_notes_source": notes_source,
+                "primary_locale": primary_locale,
+            },
         )
 
     def status(self, app_cfg: dict, version_name: str | None = None) -> ReviewStatus:

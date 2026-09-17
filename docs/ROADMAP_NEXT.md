@@ -27,7 +27,7 @@
 | 状态查询 / 盯盘（真实状态映射） | ✅ 已可用（`cli.py status --platform ios`） |
 | 上传前校验（`ipa-check`） | ✅ 已可用 |
 | IPA 上传到 TestFlight（Build Upload API） | ⏳ 下一步（**Windows 可直传，不需要 Mac**） |
-| 提审（`reviewSubmissions` API） | ⏳ 待接入 |
+| 提审（`reviewSubmissions` API） | ⏳ 待接入（**what's New 默认语言/文案已与 Android 共用**） |
 | boykeep（独立主体）的 `.p8` + Issuer ID | ⏳ 待生成后填入 |
 
 **接入与自检说明：** [IOS_ASC_SETUP.md](./IOS_ASC_SETUP.md)
@@ -41,6 +41,8 @@
    `apple-check --app-id <id>` 现在会显式提示。
 
 计划顺序：先 TestFlight 上传 → 再 ASC 提审；复用同一套 `watch` / 飞书通知。本工具不代替人工在商店后台点「发布给用户」。
+
+**上线前必读流程与坑点（含 vs Android）：** [IOS_RELEASE.md](./IOS_RELEASE.md)
 
 ## 已完成（本轮）
 

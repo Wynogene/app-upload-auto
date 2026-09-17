@@ -77,7 +77,10 @@ python cli.py watch --app-id easelife --platform android `
   --version-code <新码> --once --heartbeat-hours 0 --no-notify
 ```
 
-## 2. iOS（真上传接通前）
+## 2. iOS：上传 → 提审 → 分发（上线前必读）
+
+**完整流程、与 Android 差异、发布方式/分批坑点、检查清单：**  
+见 **[IOS_RELEASE.md](./IOS_RELEASE.md)**（请先读完再真传包）。
 
 ```powershell
 python cli.py ipa-check --app-id blurams --ipa "F:\upload-test\xxx.ipa"   # 只读校验
@@ -85,7 +88,14 @@ python cli.py status --app-id blurams --platform ios --no-notify
 python cli.py watch --app-id blurams --platform ios --once --heartbeat-hours 0 --no-notify
 ```
 
-上传 / 提审：Build Upload 尚未接通，见 [IOS_ASC_SETUP.md](./IOS_ASC_SETUP.md) / [ROADMAP_NEXT.md](./ROADMAP_NEXT.md)。接通后命令形态对齐 Android 的 `upload` → `upload-submit` → 自动登记盯盘。
+要点（防再踩 Android 那种「默认全量」坑）：
+
+- 传 IPA 只到 **TestFlight 构建**，不等于对用户上架。
+- iOS **不能** `--rollout 5` 自定义比例；只有「是否 7 天分批」。
+- 「过审后自动发布」且**未开分批** → 过审后接近全量（自动更新用户）。
+- 要闸门：用 **手动发布**；工具**永不代点**「发布给用户 / 全量」。
+
+上传 / 提审 API：Build Upload 与 `reviewSubmissions` 尚未接通，见 [IOS_ASC_SETUP.md](./IOS_ASC_SETUP.md) / [ROADMAP_NEXT.md](./ROADMAP_NEXT.md)。接通后命令形态对齐 Android，但发布方式/分批必须显式确认（见 IOS_RELEASE 第 3 节）。
 
 ## 3. 常驻盯盘（已装方式 B 则跳过）
 

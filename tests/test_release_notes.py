@@ -140,6 +140,48 @@ def test_resolve_default_locales() -> None:
     )
 
 
+def test_ios_defaults_fall_back_to_android() -> None:
+    from app.stores import release_notes as rn
+
+    app = {
+        "android": {
+            "release_notes_locales": ["en-US"],
+            "release_notes_default": "- General: Bug fixes and system optimizations.",
+        },
+        "ios": {},
+    }
+    assert rn.resolve_default_locales(app, platform="ios") == ["en-US"]
+    assert (
+        rn.resolve_default_text(app, platform="ios")
+        == "- General: Bug fixes and system optimizations."
+    )
+    notes, source = rn.build_release_notes(None, app, platform="ios")
+    assert source == rn.DEFAULT
+    assert notes == [
+        {
+            "language": "en-US",
+            "text": "- General: Bug fixes and system optimizations.",
+        }
+    ]
+
+
+def test_ios_can_override_android_notes() -> None:
+    from app.stores import release_notes as rn
+
+    app = {
+        "android": {
+            "release_notes_locales": ["en-US"],
+            "release_notes_default": "android-default",
+        },
+        "ios": {
+            "release_notes_locales": ["zh-Hans"],
+            "release_notes_default": "ios-only",
+        },
+    }
+    assert rn.resolve_default_locales(app, platform="ios") == ["zh-Hans"]
+    assert rn.resolve_default_text(app, platform="ios") == "ios-only"
+
+
 # ---------------- 默认文案（运营配置，非工具编造） ----------------
 
 
