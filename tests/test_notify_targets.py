@@ -39,3 +39,22 @@ def test_ops_vs_debug_audiences(monkeypatch) -> None:
         assert allowed == {"c59ce84g", "56798dag"}
     finally:
         _clear()
+
+
+def test_debug_never_uses_group_when_personal_only_off(monkeypatch) -> None:
+    """关掉 PERSONAL_ONLY 后，正式可进群，但健康检查/调试卡仍只能私聊 OWNER。"""
+    monkeypatch.setenv("SAFETY_PERSONAL_ONLY", "false")
+    monkeypatch.setenv("FEISHU_OWNER_USER_ID", "56798dag")
+    monkeypatch.setenv("FEISHU_NOTIFY_USER_IDS", "c59ce84g,56798dag")
+    monkeypatch.setenv("FEISHU_DEFAULT_CHAT_ID", "oc_group_for_ops")
+    monkeypatch.setenv("FEISHU_RECEIVE_ID_TYPE", "chat_id")
+    _clear()
+    try:
+        assert resolve_notify_targets(audience="debug") == [
+            ("user_id", "56798dag"),
+        ]
+        assert resolve_notify_targets(audience="ops") == [
+            ("chat_id", "oc_group_for_ops"),
+        ]
+    finally:
+        _clear()

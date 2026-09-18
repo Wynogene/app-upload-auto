@@ -187,16 +187,16 @@ def resolve_notify_targets(
 ) -> list[tuple[str, str]]:
     """Return (receive_id_type, receive_id) list for a notify fan-out.
 
-    personal-only：
-      - debug：仅 FEISHU_OWNER_USER_ID
-      - ops：FEISHU_NOTIFY_USER_IDS（未配则回退本人）
-    非 personal-only：仍可走群 chat_id。
+    - debug：始终只发 FEISHU_OWNER_USER_ID（健康检查 / 个人调试卡），绝不进群
+    - ops + personal-only：FEISHU_NOTIFY_USER_IDS（未配则回退本人）
+    - ops + 非 personal-only：apps.yaml notify_chat_id / 默认群
     """
+    # 调试通道与 SAFETY_PERSONAL_ONLY 无关：重启健康检查等绝不能进业务群
+    if audience == "debug":
+        return [resolve_owner_target()]
+
     settings = get_settings()
     if settings.safety_personal_only:
-        if audience == "debug":
-            return [resolve_owner_target()]
-
         uids = parse_user_id_list()
         if not uids:
             return [resolve_owner_target()]
