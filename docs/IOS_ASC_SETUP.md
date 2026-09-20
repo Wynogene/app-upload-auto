@@ -253,15 +253,32 @@ IPA: bundle=com.vitec.easelifeEn version=5.1054.52 build=5.1054.52.1
 | 一主体多 App 共用 / 多主体各一套凭据 | ✅ 已支持（`apps.yaml` 的 `ios.*` 可覆盖） |
 | 状态查询 / 盯盘（真实状态映射） | ✅ 已可用 |
 | 上传前校验（`ipa-check`） | ✅ 已可用 |
-| IPA 上传到 TestFlight（Build Upload API） | ⏳ 下一步（**Windows 可直传**，见下） |
-| 提审（`reviewSubmissions` API） | ⏳ 待接入（what's New 默认语言/文案已与 Android 共用） |
-| boykeep（主体 B）凭据 | ⏳ 待生成 `.p8` 后填入 |
+| IPA 上传到 TestFlight（Build Upload API） | ✅ 已接入；**默认 dry-run**，加 `--execute` 才写 ASC |
+| 提审（`reviewSubmissions` API） | ✅ 已接入；**默认 dry-run**，加 `--execute` 才写 ASC |
+| boykeep（主体 B）凭据 | ✅ 已配置（有包后用 `--execute` 验证） |
+
+**安全默认：** 不加 `--execute` 时只做预检 / 上传计划 / 提审计划，**不会**创建 buildUploads、
+不会分片 PUT、不会 reviewSubmissions。飞书卡片同理，需 `value.execute=true` 或
+`card-run --execute`。
 
 **版本说明：** iOS 提审时 `what's New` 默认语言与文案复用该 App 的
 `android.release_notes_locales` / `android.release_notes_default`（及 `.env` 全局）；
 仅当需要与 Play 不一致时，才在 `ios` 下单独配置同名项。可用
-`--whats-new` 覆盖。提审 API 接通后会按此写入 ASC localization。
+`--whats-new` 覆盖。
 
 关于 IPA 上传：已实测 `POST /v1/buildUploads` 允许 `CREATE`
 （Apple 返回 *Allowed operations are: CREATE, DELETE, GET_INSTANCE*），
 意味着**不需要 Mac / altool**，Windows 上可直接走 API 上传。
+
+有更高版本 IPA 后验证示例：
+
+```bash
+# 只读校验
+python cli.py ipa-check --app-id boykeep --ipa "F:\upload-test\xxx.ipa"
+
+# dry-run（不写商店）
+python cli.py upload-submit --app-id boykeep --platform ios --artifact "F:\upload-test\xxx.ipa" --no-notify
+
+# 真正上传+提审（显式确认）
+python cli.py upload-submit --app-id boykeep --platform ios --artifact "F:\upload-test\xxx.ipa" --execute --no-notify
+```

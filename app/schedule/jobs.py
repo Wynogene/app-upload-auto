@@ -7,6 +7,12 @@ from loguru import logger
 
 from app.config import get_settings, load_apps_config
 from app.core.service import AppReleaseService
+from app.core.watch_fingerprint import (
+    is_ops_fingerprint,
+    ops_fp_state,
+    ops_watch_fingerprint,
+    synthesize_message_from_ops_fp,
+)
 from app.core.watch_targets import (
     active_targets,
     console_hints_for,
@@ -19,20 +25,18 @@ _scheduler: BackgroundScheduler | None = None
 _last_fingerprint: dict[str, str] = {}
 
 
-def _fingerprint(app_id: str, platform: str, state: str, message: str) -> str:
-    # 与 cli watch 保持一致：state|message（避免 serve/cli 格式不一致导致误报）
-    return f"{state}|{message}"
-
-
-def _split_fp(fp: str) -> tuple[str, str]:
-    if "|" in fp:
-        state, msg = fp.split("|", 1)
-        return state, msg
-    return fp, ""
+def _fingerprint_status(status) -> str:
+    """运营向指纹：状态 + 放量；放量不变则不通知。"""
+    return ops_watch_fingerprint(status)
 
 
 def _is_transient_fp(fp: str) -> bool:
-    state, msg = _split_fp(fp)
+    if is_ops_fingerprint(fp):
+        return False
+    if "|" in fp:
+        state, msg = fp.split("|", 1)
+    else:
+        state, msg = fp, ""
     return is_transient_status_failure(state=state, message=msg)
 
 
@@ -53,12 +57,7 @@ def poll_review_status_job() -> None:
     targets_by_key = {t.key: t for t in active_targets()}
     for key, status in service.status_watch_targets():
         target = targets_by_key.get(key)
-        fp = _fingerprint(
-            status.app_id,
-            status.platform.value,
-            status.state.value,
-            status.message,
-        )
+        fp = _fingerprint_status(status)
         mem_key = f"watch:{key}"
         prev = (target.last_fingerprint if target else "") or _last_fingerprint.get(mem_key, "")
 
@@ -88,16 +87,21 @@ def poll_review_status_job() -> None:
                     "watch healed transient fingerprint silently key={}",
                     key,
                 )
+            elif (not is_ops_fingerprint(prev)) and is_ops_fingerprint(fp):
+                # 旧全文指纹 → 运营指纹：静默升级，避免一次刷屏
+                _last_fingerprint[mem_key] = fp
+                if target:
+                    update_target_fields(key, last_fingerprint=fp)
+                logger.info("watch migrated fingerprint to ops_v1 key={}", key)
             else:
                 changed.append(status)
                 pending_fps.append((mem_key, fp))
-                prev_state, prev_msg = _split_fp(prev)
                 from app.core.notify_titles import review_change_notify_title
 
                 change_titles[key] = review_change_notify_title(
-                    prev_state,
+                    ops_fp_state(prev),
                     status.state,
-                    previous_message=prev_msg,
+                    previous_message=synthesize_message_from_ops_fp(prev),
                     current_message=status.message,
                 )
 
@@ -112,12 +116,7 @@ def poll_review_status_job() -> None:
     if not targets_by_key:
         for status in service.status_all_apps():
             key = f"{status.app_id}:{status.platform.value}"
-            fp = _fingerprint(
-                status.app_id,
-                status.platform.value,
-                status.state.value,
-                status.message,
-            )
+            fp = _fingerprint_status(status)
             if is_transient_status_failure(
                 state=status.state.value,
                 message=status.message,
@@ -133,6 +132,8 @@ def poll_review_status_job() -> None:
                 if not prev:
                     _last_fingerprint[key] = fp
                 elif _is_transient_fp(prev):
+                    _last_fingerprint[key] = fp
+                elif (not is_ops_fingerprint(prev)) and is_ops_fingerprint(fp):
                     _last_fingerprint[key] = fp
                 else:
                     changed.append(status)

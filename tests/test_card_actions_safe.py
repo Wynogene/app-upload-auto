@@ -50,3 +50,25 @@ def test_internal_upload_request_ok() -> None:
     assert not isinstance(req, str)
     assert req.track == "internal"
     assert req.allow_production is False
+    assert req.execute is False
+
+
+def test_ios_card_execute_defaults_off() -> None:
+    v = build_submit_card_value(app_id="boykeep", platform="ios")
+    assert "execute" not in v
+    req = _build_upload_request(
+        {"app_id": "boykeep", "platform": "ios"},
+        Platform.IOS,
+        artifact_path=r"F:\x.ipa",
+        operator_open_id=None,
+    )
+    assert not isinstance(req, str)
+    assert req.execute is False
+    req2 = _build_upload_request(
+        {"app_id": "boykeep", "execute": True},
+        Platform.IOS,
+        artifact_path=r"F:\x.ipa",
+        operator_open_id=None,
+    )
+    assert not isinstance(req2, str)
+    assert req2.execute is True

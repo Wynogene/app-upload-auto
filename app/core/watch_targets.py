@@ -60,7 +60,7 @@ class WatchTarget:
     submitted_at: float = field(default_factory=time.time)
     last_fingerprint: str = ""
     last_heartbeat_at: float = 0.0
-    heartbeat_hours: float = 12.0
+    heartbeat_hours: float = 0.0
     active: bool = True
     note: str = ""
 
@@ -97,7 +97,7 @@ def load_targets() -> list[WatchTarget]:
                 last_heartbeat_at=float(item.get("last_heartbeat_at") or 0.0),
                 # 注意：0 表示关闭心跳，不能用 `or 12`（0 会被当成假值）
                 heartbeat_hours=(
-                    12.0
+                    0.0
                     if item.get("heartbeat_hours") is None
                     else float(item.get("heartbeat_hours"))
                 ),
@@ -169,7 +169,7 @@ def upsert_target(
     platform: str = "android",
     version_code: str | None = None,
     track: str = "production",
-    heartbeat_hours: float = 12.0,
+    heartbeat_hours: float = 0.0,
     note: str = "",
 ) -> WatchTarget:
     """Insert or replace a watch target.

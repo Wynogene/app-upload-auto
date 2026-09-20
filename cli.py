@@ -116,6 +116,12 @@ def cli() -> None:
     callback=_rollout_callback,
     help="分阶段发布百分比（仅 production）。省略则用配置默认 5%；--rollout 100 表示全量。",
 )
+@click.option(
+    "--execute",
+    is_flag=True,
+    default=False,
+    help="iOS：真正调用 ASC 写接口上传；默认 dry-run 不写商店。",
+)
 @click.option("--notify/--no-notify", default=True)
 def upload_cmd(
     app_id: str,
@@ -126,9 +132,10 @@ def upload_cmd(
     whats_new: tuple[str, ...],
     allow_production: bool,
     rollout: float | None,
+    execute: bool,
     notify: bool,
 ) -> None:
-    """上传并发布到指定轨道（Android 默认 internal）。"""
+    """上传并发布到指定轨道（Android 默认 internal；iOS 默认 dry-run）。"""
     if (track or "").lower() in {"production", "prod"} and not allow_production:
         raise click.ClickException("正式版请同时加 --allow-production")
     plain, scoped = _split_notes(whats_new)
@@ -143,6 +150,7 @@ def upload_cmd(
         release_notes=scoped,
         allow_production=allow_production,
         rollout_fraction=rollout,
+        execute=execute,
     )
     result = service.upload(req)
     click.echo(json.dumps(result.model_dump(), ensure_ascii=False, indent=2))
@@ -158,7 +166,9 @@ def upload_cmd(
 @click.option("--app-id", required=True)
 @click.option("--platform", required=True, type=click.Choice(["ios", "android"]))
 @click.option("--version-code", default=None, help="Android 已上传的 versionCode，如 1940")
-@click.option("--track", required=True, help="目标轨道: internal|alpha|beta|production")
+@click.option("--version-name", default=None, help="iOS 版本号，如 5.1054.53")
+@click.option("--build-id", default=None, help="iOS ASC build id（upload --execute 后可得）")
+@click.option("--track", default=None, help="Android 目标轨道: internal|alpha|beta|production")
 @click.option(
     "--whats-new",
     "whats_new",
@@ -178,40 +188,59 @@ def upload_cmd(
     callback=_rollout_callback,
     help="分阶段发布百分比（仅 production）。省略则用配置默认 5%；续推如 --rollout 20；100 表示转全量。",
 )
+@click.option(
+    "--execute",
+    is_flag=True,
+    default=False,
+    help="iOS：真正 reviewSubmissions 提审；默认 dry-run 不写商店。",
+)
 @click.option("--notify/--no-notify", default=True)
 def release_cmd(
     app_id: str,
     platform: str,
     version_code: str | None,
-    track: str,
+    version_name: str | None,
+    build_id: str | None,
+    track: str | None,
     whats_new: tuple[str, ...],
     release_status: str,
     allow_production: bool,
     rollout: float | None,
+    execute: bool,
     notify: bool,
 ) -> None:
-    """将已上传版本推进到指定轨道（Android 发布/提审）。"""
-    if track.lower() in {"production", "prod"} and not allow_production:
-        raise click.ClickException("正式版请同时加 --allow-production")
-    if _platform(platform) == Platform.ANDROID and not version_code:
-        raise click.ClickException("Android release 需要 --version-code")
-    if rollout is not None and release_status != "completed":
-        raise click.ClickException(
-            "`--rollout` 与 `--release-status` 不能同时指定"
-            f"（当前 release-status={release_status}）。分批发布请只用 --rollout。"
-        )
+    """将已上传版本推进到指定轨道（Android 发布/提审；iOS 默认 dry-run）。"""
+    plat = _platform(platform)
+    if plat == Platform.ANDROID:
+        if not track:
+            raise click.ClickException("Android release 需要 --track")
+        if track.lower() in {"production", "prod"} and not allow_production:
+            raise click.ClickException("正式版请同时加 --allow-production")
+        if not version_code:
+            raise click.ClickException("Android release 需要 --version-code")
+        if rollout is not None and release_status != "completed":
+            raise click.ClickException(
+                "`--rollout` 与 `--release-status` 不能同时指定"
+                f"（当前 release-status={release_status}）。分批发布请只用 --rollout。"
+            )
+    else:
+        if not version_name:
+            raise click.ClickException("iOS release 需要 --version-name")
     plain, scoped = _split_notes(whats_new)
     service = AppReleaseService()
     req = SubmitRequest(
         app_id=app_id,
-        platform=_platform(platform),
+        platform=plat,
         version_code=version_code,
+        version_name=version_name,
+        build_id=build_id,
         track=track,
         whats_new=plain,
         release_notes=scoped,
         release_status=release_status,
         allow_production=allow_production,
         rollout_fraction=rollout,
+        execute=execute,
     )
     result = service.submit(req)
     click.echo(json.dumps(result.model_dump(), ensure_ascii=False, indent=2))
@@ -242,6 +271,12 @@ def release_cmd(
     callback=_rollout_callback,
     help="分阶段发布百分比（仅 production）。省略则用配置默认 5%；--rollout 100 表示全量。",
 )
+@click.option(
+    "--execute",
+    is_flag=True,
+    default=False,
+    help="iOS：真正上传并提审；默认 dry-run 不写商店。",
+)
 @click.option("--notify/--no-notify", default=True, help="是否推送飞书")
 def upload_submit(
     app_id: str,
@@ -252,9 +287,10 @@ def upload_submit(
     whats_new: tuple[str, ...],
     allow_production: bool,
     rollout: float | None,
+    execute: bool,
     notify: bool,
 ) -> None:
-    """Android：上传并发布到轨道；iOS：上传后再 submit（当前仍为骨架）。"""
+    """Android：上传并发布到轨道；iOS：上传后再 submit（默认 dry-run）。"""
     if (track or "").lower() in {"production", "prod"} and not allow_production:
         raise click.ClickException("正式版请同时加 --allow-production")
     plain, scoped = _split_notes(whats_new)
@@ -269,6 +305,7 @@ def upload_submit(
         release_notes=scoped,
         allow_production=allow_production,
         rollout_fraction=rollout,
+        execute=execute,
     )
     results = service.upload_and_submit(req)
     click.echo(json.dumps([r.model_dump() for r in results], ensure_ascii=False, indent=2))
@@ -357,9 +394,9 @@ def ipa_check(app_id: str, ipa: str, json_out: bool) -> None:
 @click.option("--interval", default=30, show_default=True, help="轮询间隔（分钟）")
 @click.option(
     "--heartbeat-hours",
-    default=12.0,
+    default=0.0,
     show_default=True,
-    help="每隔 N 小时发一次「仍在盯，请到 Play Console 核对」；0=关闭心跳",
+    help="每隔 N 小时发一次「审核盯盘心跳提醒」；默认 0=关闭（仅状态/放量变化时通知）",
 )
 @click.option("--once", is_flag=True, default=False, help="只查一次就退出")
 @click.option("--notify/--no-notify", default=True)
@@ -409,28 +446,36 @@ def watch(
         now = time.time()
         for s in statuses:
             click.echo(f"[{s.state.value}] {s.message}")
-            fp = f"{s.state.value}|{s.message}"
+            from app.core.watch_fingerprint import (
+                is_ops_fingerprint,
+                ops_fp_state,
+                ops_watch_fingerprint,
+                synthesize_message_from_ops_fp,
+            )
+
+            fp = ops_watch_fingerprint(s)
             if fp != last_fp:
                 if last_fp and notify:
-                    prev_state, prev_msg = (
-                        last_fp.split("|", 1) if "|" in last_fp else (last_fp, "")
+                    migrate = (not is_ops_fingerprint(last_fp)) and is_ops_fingerprint(
+                        fp
                     )
-                    from app.core.notify_titles import review_change_notify_title
+                    if not migrate:
+                        from app.core.notify_titles import review_change_notify_title
 
-                    title = review_change_notify_title(
-                        prev_state,
-                        s.state,
-                        previous_message=prev_msg,
-                        current_message=s.message,
-                    )
-                    try:
-                        Notifier().notify_review_statuses(
-                            [s],
-                            title=title,
-                            footer=console_hint_for(s.platform.value),
+                        title = review_change_notify_title(
+                            ops_fp_state(last_fp),
+                            s.state,
+                            previous_message=synthesize_message_from_ops_fp(last_fp),
+                            current_message=s.message,
                         )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("notify failed: {}", exc)
+                        try:
+                            Notifier().notify_review_statuses(
+                                [s],
+                                title=title,
+                                footer=console_hint_for(s.platform.value),
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning("notify failed: {}", exc)
                 last_fp = fp
                 from app.core.watch_targets import update_target_fields
 
@@ -857,6 +902,12 @@ def submit_card(
     default=False,
     help="只下载/解压选型，不写商店（最安全自检）",
 )
+@click.option(
+    "--execute",
+    is_flag=True,
+    default=False,
+    help="iOS：真正写 ASC；默认 dry-run。Android 行为不变。",
+)
 def card_run(
     app_id: str,
     platform: str,
@@ -867,6 +918,7 @@ def card_run(
     track: str,
     allow_production: bool,
     dry_resolve: bool,
+    execute: bool,
 ) -> None:
     """按与调试卡相同的契约执行提审（默认同轨 internal）。结果私聊本人。"""
     if not artifact_path and not artifact_url:
@@ -922,9 +974,11 @@ def card_run(
         version=version,
         track=track,
         allow_production=allow_production,
+        execute=execute,
     )
+    mode = "execute" if execute else "dry-run"
     click.echo(
-        f"[card-run] 开始执行 track={track} allow_production={allow_production} …",
+        f"[card-run] 开始执行 track={track} allow_production={allow_production} mode={mode} …",
         err=True,
     )
     results = run_upload_submit_job(value, operator_open_id=get_settings().feishu_owner_open_id or None)

@@ -1,8 +1,9 @@
-"""App Store Connect adapter (skeleton).
+"""App Store Connect adapter.
 
 Auth: JWT (ES256) with Key ID + Issuer ID + .p8
-Upload: Build Upload API and/or remote Mac runner (altool) — see TODOs.
-Submit / status: App Store Connect REST API.
+Upload: ASC Build Upload API（默认 dry-run，``execute=True`` 才写）
+Submit: reviewSubmissions + what's New（同上）
+Status: App Store Connect REST API（只读）
 """
 
 from __future__ import annotations
@@ -301,19 +302,22 @@ class AppleStoreClient(StoreClient):
         return out
 
     def upload(self, req: UploadRequest, app_cfg: dict) -> OperationResult:
-        """上传 IPA。
+        """上传 IPA 到 ASC（Build Upload API）。
 
-        当前已完成：上传前校验（bundle id / 版本递增 / 构建号查重）。
-        待接入：ASC Build Upload API（POST /v1/buildUploads → 分片 PUT → PATCH uploaded）。
+        默认 ``execute=False``：只做预检 + 上传计划，**不写商店**。
+        ``execute=True``：真实分片上传并等到 build VALID。
         """
+        from app.stores.apple_build_upload import execute_build_upload, plan_build_upload
+
         ios = app_cfg.get("ios") or {}
         artifact = req.artifact_path or ios.get("artifact_path")
         artifact_url = req.artifact_url or ios.get("artifact_url")
         logger.info(
-            "apple.upload app={} artifact={} url={}",
+            "apple.upload app={} artifact={} url={} execute={}",
             req.app_id,
             artifact,
             artifact_url,
+            req.execute,
         )
         if not artifact and not artifact_url:
             return OperationResult(
@@ -325,24 +329,27 @@ class AppleStoreClient(StoreClient):
 
         if not artifact:
             return OperationResult(
-                ok=True,
+                ok=False,
                 app_id=req.app_id,
                 platform=Platform.IOS,
                 message=(
-                    "提供了 artifact_url 但未给本地 IPA，无法做上传前校验。"
-                    "建议先用 ipa-check 校验本地包。"
+                    "仅提供了 artifact_url：请先下载为本地 IPA 再上传"
+                    "（群晖分享页不是直链）。可用 card-run --dry-resolve 或手动下载。"
                 ),
                 details={"artifact_url": artifact_url},
             )
 
         pre = self.preflight_ipa(app_cfg, artifact)
         meta = pre.get("meta")
+        version_name = req.version_name or getattr(meta, "version_name", None)
+        build_number = req.build_number or getattr(meta, "build_number", None)
         base_details = {
             "artifact": str(artifact),
             "bundle_id": getattr(meta, "bundle_id", None),
-            "version_name": getattr(meta, "version_name", None),
-            "build_number": getattr(meta, "build_number", None),
+            "version_name": version_name,
+            "build_number": build_number,
             "latest_released_version": pre.get("latest_released_version"),
+            "execute": bool(req.execute),
         }
         if not pre.get("ok"):
             return OperationResult(
@@ -352,36 +359,114 @@ class AppleStoreClient(StoreClient):
                 message=f"上传前校验未通过，已阻止上传：\n{pre.get('message')}",
                 details=base_details,
             )
+        if not version_name or not build_number:
+            return OperationResult(
+                ok=False,
+                app_id=req.app_id,
+                platform=Platform.IOS,
+                message="无法从 IPA 解析 version / build",
+                details=base_details,
+            )
 
+        app_store_app_id = ios.get("app_store_app_id")
+        if not app_store_app_id:
+            return OperationResult(
+                ok=False,
+                app_id=req.app_id,
+                platform=Platform.IOS,
+                message="apps.yaml 缺少 ios.app_store_app_id",
+                details=base_details,
+            )
+
+        try:
+            plan = plan_build_upload(
+                app_store_app_id=str(app_store_app_id),
+                ipa_path=artifact,
+                version_name=str(version_name),
+                build_number=str(build_number),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return OperationResult(
+                ok=False,
+                app_id=req.app_id,
+                platform=Platform.IOS,
+                message=f"准备上传计划失败: {exc}",
+                details=base_details,
+            )
+
+        base_details.update(
+            {
+                "file_size": plan.file_size,
+                "md5": plan.md5_hex,
+                "planned_steps": plan.steps,
+            }
+        )
+
+        if not req.execute:
+            return OperationResult(
+                ok=True,
+                app_id=req.app_id,
+                platform=Platform.IOS,
+                message=(
+                    "iOS 上传 dry-run：预检通过，未写 ASC。"
+                    f"包 {plan.file_name} ({plan.file_size} bytes) "
+                    f"version={plan.cf_bundle_short_version} "
+                    f"build={plan.cf_bundle_version}。"
+                    "真正上传请加 --execute。"
+                ),
+                details={**base_details, "dry_run": True},
+            )
+
+        settings = get_settings()
+        with httpx.Client(
+            timeout=httpx.Timeout(120.0, connect=30.0),
+            trust_env=bool(settings.apple_use_proxy),
+        ) as client:
+            result = execute_build_upload(
+                client=client,
+                headers=self._headers(app_cfg),
+                plan=plan,
+            )
+        base_details.update(result.details)
         return OperationResult(
-            ok=False,
+            ok=result.ok,
             app_id=req.app_id,
             platform=Platform.IOS,
-            message=(
-                "上传前校验已通过，但 Build Upload API 尚未接入，"
-                "本次未上传到 TestFlight（真实失败，非假成功）。\n"
-                f"{pre.get('message')}"
-            ),
-            details=base_details,
+            message=result.message,
+            details={
+                **base_details,
+                "build_id": result.build_id,
+                "build_upload_id": result.build_upload_id,
+                "build_processing_state": result.build_processing_state,
+            },
         )
 
     def submit(self, req: SubmitRequest, app_cfg: dict) -> OperationResult:
-        """Create review submission for an appStoreVersion.
+        """iOS：创建/复用版本、挂构建、写 what's New、reviewSubmissions 提审。
 
-        Real flow (to implement):
-        - find/create appStoreVersions
-        - attach build
-        - set whatsNew localization（默认语言/文案与 Android 共用，见 release_notes）
-        - POST reviewSubmissions + reviewSubmissionItems
-        - PATCH submitted=true
+        默认 ``execute=False`` 只输出计划；``execute=True`` 才写 ASC。
         """
+        from app.stores.apple_review_submit import (
+            ReviewSubmitPlan,
+            build_review_plan_steps,
+            execute_review_submit,
+        )
+        from app.stores.release_notes import (
+            build_release_notes,
+            format_issues,
+            has_errors,
+            validate_notes,
+        )
+
         ios = app_cfg.get("ios") or {}
         app_store_app_id = ios.get("app_store_app_id")
         logger.info(
-            "apple.submit stub app={} asc_app_id={} version={}",
+            "apple.submit app={} asc_app_id={} version={} build_id={} execute={}",
             req.app_id,
             app_store_app_id,
             req.version_name,
+            req.build_id,
+            req.execute,
         )
         if not app_store_app_id:
             return OperationResult(
@@ -390,13 +475,6 @@ class AppleStoreClient(StoreClient):
                 platform=Platform.IOS,
                 message="apps.yaml 缺少 ios.app_store_app_id",
             )
-
-        from app.stores.release_notes import (
-            build_release_notes,
-            format_issues,
-            has_errors,
-            validate_notes,
-        )
 
         raw: list[str] = []
         for locale, text in (req.release_notes or {}).items():
@@ -410,7 +488,7 @@ class AppleStoreClient(StoreClient):
                 app_cfg,
                 platform="ios",
             )
-        except Exception as exc:  # noqa: BLE001 — NotesSpecError 等
+        except Exception as exc:  # noqa: BLE001
             return OperationResult(
                 ok=False,
                 app_id=req.app_id,
@@ -434,34 +512,87 @@ class AppleStoreClient(StoreClient):
                 details={"app_store_app_id": app_store_app_id},
             )
 
-        primary_locale = (notes or [{}])[0].get("language") if notes else None
-        notes_preview = "; ".join(
-            f"{n.get('language')}={(n.get('text') or '')[:80]}" for n in (notes or [])
-        )
-        source_note = (
-            "（与 Android 共用默认配置）"
-            if notes_source == "default"
-            else "（命令行 --whats-new）"
-            if notes_source == "explicit"
-            else ""
-        )
+        text_by_locale = {
+            str(n.get("language")): str(n.get("text") or "")
+            for n in (notes or [])
+            if n.get("language")
+        }
+        fallback = ""
+        if notes:
+            fallback = str(notes[0].get("text") or "")
 
+        version_name = req.version_name
+        build_id = req.build_id
+        if not version_name:
+            return OperationResult(
+                ok=False,
+                app_id=req.app_id,
+                platform=Platform.IOS,
+                message="提审需要 version_name（CFBundleShortVersionString）",
+            )
+
+        plan = ReviewSubmitPlan(
+            app_store_app_id=str(app_store_app_id),
+            version_string=str(version_name),
+            build_id=build_id,
+            whats_new_by_locale=text_by_locale,
+            fallback_whats_new=fallback,
+        )
+        plan.steps = build_review_plan_steps(plan)
+        details = {
+            "app_store_app_id": app_store_app_id,
+            "release_notes": notes,
+            "release_notes_source": notes_source,
+            "planned_steps": plan.steps,
+            "execute": bool(req.execute),
+            "build_id": build_id,
+        }
+
+        if not req.execute:
+            return OperationResult(
+                ok=True,
+                app_id=req.app_id,
+                platform=Platform.IOS,
+                message=(
+                    "iOS 提审 dry-run：版本说明已解析，未写 ASC。"
+                    f"version={version_name} build_id={build_id or '（未指定）'}。"
+                    "真正提审请加 --execute。"
+                ),
+                details={**details, "dry_run": True},
+            )
+
+        if not build_id:
+            return OperationResult(
+                ok=False,
+                app_id=req.app_id,
+                platform=Platform.IOS,
+                message="真实提审需要 build_id（请先 upload --execute 或传入已有构建 id）",
+                details=details,
+            )
+
+        settings = get_settings()
+        with httpx.Client(
+            timeout=httpx.Timeout(60.0, connect=30.0),
+            trust_env=bool(settings.apple_use_proxy),
+        ) as client:
+            result = execute_review_submit(
+                client=client,
+                headers=self._headers(app_cfg),
+                plan=plan,
+            )
+        details.update(result.details)
         return OperationResult(
-            ok=False,
+            ok=result.ok,
             app_id=req.app_id,
             platform=Platform.IOS,
-            review_state=ReviewState.UNKNOWN,
-            message=(
-                "iOS 提审未执行：reviewSubmissions API 尚未接入"
-                "（真实失败，非假成功）。"
-                f"已解析 what's New{source_note}："
-                f"默认语言={primary_locale}；{notes_preview}"
+            review_state=(
+                ReviewState.WAITING_FOR_REVIEW if result.ok else ReviewState.UNKNOWN
             ),
+            message=result.message,
             details={
-                "app_store_app_id": app_store_app_id,
-                "release_notes": notes,
-                "release_notes_source": notes_source,
-                "primary_locale": primary_locale,
+                **details,
+                "version_id": result.version_id,
+                "submission_id": result.submission_id,
             },
         )
 

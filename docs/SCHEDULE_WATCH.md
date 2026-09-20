@@ -69,7 +69,8 @@ powershell -File F:\app-upload-auto\scripts\windows\uninstall-autostart.ps1
 - 优先扫描 `data/watch_targets.json` 里**已登记**的盯盘目标（正式版提审成功或 `watch` 会写入）。
 - 指纹变化 → 飞书通知（专用标题优先）：过审/待你发布、被拒、Android 放量变更、iOS 分批进度、iOS 合规/合同卡住、构建失效或长时间 PROCESSING。
 - **政策状态页**（Play「政策状态」）API 读不到，需人工看 Console + 邮件；工具只在 footer 提示。
-- `heartbeat_hours > 0` 时才发心跳；设为 `0` 则只在变化时通知。
+- 默认 **不发心跳**（`heartbeat_hours=0`）；仅状态/放量变化时通知。若要心跳：`--heartbeat-hours 12`。
+- `heartbeat_hours > 0` 时才发「审核盯盘心跳提醒」。
 - 启动 serve 后会**立刻扫一轮**，之后按 `interval_minutes` 循环。
 - Footer 按平台区分 Android / iOS 控制台提示（见 `ANDROID_HINT` / `IOS_HINT`）。
 - 全程**只读**，不写商店、不代点发布/改放量。

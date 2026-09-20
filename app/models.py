@@ -40,6 +40,8 @@ class UploadRequest(BaseModel):
     allow_production: bool = False
     # Android: 分阶段发布比例（0~1 小数）。None=全面发布；0<f<1=分批放量。
     rollout_fraction: float | None = None
+    # iOS：True 才真正调用 ASC 写接口（上传/提审）；默认 False=dry-run 不写商店
+    execute: bool = False
     operator_open_id: str | None = None
 
 
@@ -62,6 +64,8 @@ class SubmitRequest(BaseModel):
     # None=保持 release_status 语义；0<f<1=分批放量（status 强制 inProgress）；
     # f>=1=结束分批转全面发布。
     rollout_fraction: float | None = None
+    # iOS：True 才真正 reviewSubmissions；默认 dry-run
+    execute: bool = False
     operator_open_id: str | None = None
 
 

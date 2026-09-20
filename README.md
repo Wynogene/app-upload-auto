@@ -10,15 +10,15 @@
 | 能力 | Android (Google Play) | iOS (App Store Connect) |
 |------|------------------------|-------------------------|
 | 鉴权 / 连通自检 | ✅ 服务账号 JSON | ✅ `apple-check`（`.p8`） |
-| 上传 | ✅ AAB（含正式版） | ⏳ Build Upload API（**Windows 可直传，不需 Mac**） |
-| 提审 / 推进轨道 | ✅ `upload` / `upload-submit` / `release` | ⏳ `reviewSubmissions` 待接入 |
+| 上传 | ✅ AAB（含正式版） | ✅ Build Upload（默认 dry-run，`--execute` 才写） |
+| 提审 / 推进轨道 | ✅ `upload` / `upload-submit` / `release` | ✅ `reviewSubmissions`（默认 dry-run，`--execute` 才写） |
 | 分阶段发布 | ✅ `--rollout`（正式版默认约 5%） | ✅ 只读盯盘（Apple 固定 7 天曲线） |
 | 状态 / 过审生命周期 | ✅ `status` + lifecycle | ✅ `status`（含分批进度） |
 | 上传前校验 | （版本码由 Play 拦截） | ✅ `ipa-check` |
 | 盯盘通知 | ✅ `watch` / `serve` 调度 | ✅ 同上 |
 | 运营向飞书文案 | ✅ 风格 D 字段表 | ✅ 版本精确到构建号 |
 
-多 App：`blurams` + `easelife` 共用一套 Play SA / Apple 团队密钥；`boykeep` 为独立主体（Android SA 已配，iOS 需单独 `.p8`）。
+多 App：`blurams` + `easelife` 共用一套 Play SA / Apple 团队密钥；`boykeep` 为独立主体（Android SA + iOS `.p8` 已配）。
 
 ## 个人调试（推荐）
 
@@ -119,7 +119,7 @@ data/             # watch_targets.json（本地运行态，勿提交密钥）
 
 - iOS：`ApiKey_*.p8`（个人）与 `AuthKey_*.p8`（团队）的 JWT `sub` 不同，填错会 401；项目按文件名自动判断。见 [docs/IOS_ASC_SETUP.md](docs/IOS_ASC_SETUP.md)。
 - 同一 Apple 团队多 App 共用一套密钥；不同主体（如 boykeep）在 `apps.yaml` 的 `ios.*` 覆盖。
-- IPA 上传规划走 **ASC Build Upload API**，Windows 可直传，**不依赖 Mac / altool**（尚未接通）。
+- IPA 上传走 **ASC Build Upload API**，Windows 可直传，**不依赖 Mac / altool**；默认 dry-run，加 `--execute` 才写商店。
 
 ## 飞书
 

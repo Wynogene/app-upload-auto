@@ -1,6 +1,7 @@
 """运营向飞书通知正文：风格 D（字段对齐）。
 
-指纹比对仍用完整 status.message；仅「给人看的卡片」走本模块。
+盯盘「是否通知」指纹见 ``watch_fingerprint.ops_watch_fingerprint``（状态+放量）。
+本模块只负责给人看的卡片正文。
 不写商店。
 """
 

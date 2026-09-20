@@ -97,7 +97,7 @@ python cli.py watch --app-id blurams --platform ios --once --heartbeat-hours 0 -
 - 「过审后自动发布」且**未开分批** → 过审后接近全量（自动更新用户）。
 - 要闸门：用 **手动发布**；工具**永不代点**「发布给用户 / 全量」。
 
-上传 / 提审 API：Build Upload 与 `reviewSubmissions` 尚未接通，见 [IOS_ASC_SETUP.md](./IOS_ASC_SETUP.md) / [ROADMAP_NEXT.md](./ROADMAP_NEXT.md)。接通后命令形态对齐 Android，但发布方式/分批必须显式确认（见 IOS_RELEASE 第 3 节）。
+上传 / 提审 API 已接入：**默认 dry-run**，加 `--execute` 才写 ASC。见 [IOS_ASC_SETUP.md](./IOS_ASC_SETUP.md)。发布方式/分批仍须人工在 ASC 确认（见 IOS_RELEASE 第 3 节）；工具永不代点「发布给用户」。
 
 ## 3. 常驻盯盘（已装方式 B 则跳过）
 

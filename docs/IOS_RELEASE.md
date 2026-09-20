@@ -8,8 +8,8 @@
 | 步骤 | 本工具 | 人工 ASC |
 |------|--------|----------|
 | 上传前校验 `ipa-check` | ✅ | — |
-| IPA 上传到 TestFlight | ⏳ 待接通 Build Upload | Transporter / Xcode 仍可用 |
-| 提审 `reviewSubmissions` | ⏳ 待接通 | ASC 网页可提审 |
+| IPA 上传到 TestFlight | ✅ 默认 dry-run；`--execute` 才写 ASC | Transporter / Xcode 仍可用 |
+| 提审 `reviewSubmissions` | ✅ 默认 dry-run；`--execute` 才写 ASC | ASC 网页可提审 |
 | 状态 / 分批盯盘 | ✅ 只读 | — |
 | 点「发布给用户 / 全量 / 暂停分批」 | ❌ **永不代点** | 需运营在 ASC 操作 |
 
@@ -143,23 +143,30 @@ API 顺序（接通提审时按此实现）：
 
 ---
 
-## 3. 本工具接通后的命令形态（预期）
+## 3. 本工具命令形态
 
-与 Android 对齐，但语义不同：
+与 Android 对齐，但语义不同；**默认不写商店**：
 
 ```powershell
 # 只读：传包前必跑
 python cli.py ipa-check --app-id easelife --ipa "F:\upload-test\xxx.ipa"
 python cli.py status --app-id easelife --platform ios --no-notify
 
-# 接通后（尚未可用时不要当真传）：
-# python cli.py upload --app-id easelife --platform ios --ipa "..."
-#   → 只上传到 TestFlight，不对用户可见
-# python cli.py upload-submit / submit ...
-#   → 写 what's New（默认与 Android 相同）+ 挂构建 + 提审
-#   → 默认：releaseType=AFTER_APPROVAL + 开启 7 天分批（显式回显确认）
-#   → 挂构建默认用「本次 upload 的 buildId」，可用 --build-number 覆盖
+# dry-run：预检 + 上传/提审计划，不写 ASC
+python cli.py upload-submit --app-id easelife --platform ios --artifact "F:\upload-test\xxx.ipa" --no-notify
+
+# 真正上传到 TestFlight + 提审（显式）
+python cli.py upload-submit --app-id easelife --platform ios --artifact "F:\upload-test\xxx.ipa" --execute --no-notify
+
+# 仅提审已有构建（dry-run / --execute）
+python cli.py release --app-id easelife --platform ios --version-name 5.1054.53 --build-id <ASC_BUILD_ID> --no-notify
 ```
+
+说明：
+
+- `upload` / `upload-submit` / `release` 对 iOS 均需 `--execute` 才写 ASC
+- 挂构建默认用「本次 upload 返回的 build_id」
+- 发布方式 / 7 天分批仍须在 ASC 人工确认；工具**永不代点**「发布给用户」
 
 **版本说明默认值（已实现解析）：**
 

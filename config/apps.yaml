@@ -86,10 +86,10 @@ apps:
       # 用 blurams 团队密钥查会 404。请在 boykeep 主体下生成 .p8，并填写下面三行
       # （步骤见 docs/MULTI_APP_READY.md / docs/IOS_ASC_SETUP.md）。
       app_store_app_id: "6472993326"
-      key_id: ""
-      issuer_id: ""
-      private_key_path: ""
-      artifact_url: ""
+      key_id: "DL58V4XRPT"
+      issuer_id: "c8dd5e9c-5731-4867-8751-e11f55d7f393"
+      private_key_path: "secrets/AuthKey_DL58V4XRPT.p8"
+      artifact_url: "http://delivery.vaas.plus:5000/sharing/E78MniZ62"
       artifact_path: ""
     android:
       enabled: true

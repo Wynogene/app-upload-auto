@@ -26,9 +26,9 @@
 | 按 App 覆盖凭据（多主体支持） | ✅ 已支持（`apps.yaml` 的 `ios.key_id/issuer_id/private_key_path`） |
 | 状态查询 / 盯盘（真实状态映射） | ✅ 已可用（`cli.py status --platform ios`） |
 | 上传前校验（`ipa-check`） | ✅ 已可用 |
-| IPA 上传到 TestFlight（Build Upload API） | ⏳ 下一步（**Windows 可直传，不需要 Mac**） |
-| 提审（`reviewSubmissions` API） | ⏳ 待接入（**what's New 默认语言/文案已与 Android 共用**） |
-| boykeep（独立主体）的 `.p8` + Issuer ID | ⏳ 待生成后填入 |
+| IPA 上传到 TestFlight（Build Upload API） | ✅ 已接入（默认 dry-run，`--execute` 才写） |
+| 提审（`reviewSubmissions` API） | ✅ 已接入（默认 dry-run，`--execute` 才写） |
+| boykeep（独立主体）的 `.p8` + Issuer ID | ✅ 已配置 |
 
 **接入与自检说明：** [IOS_ASC_SETUP.md](./IOS_ASC_SETUP.md)
 
@@ -50,11 +50,10 @@
 - **上传前校验**：`ipa-check` 拦截 bundle id 不符 / 版本号未递增 / 构建号重复，传包前就失败
 - **多主体凭据**：`apps.yaml` 的 `ios.key_id/issuer_id/private_key_path` 可按 App 覆盖，缺省回退 `.env`
 
-## 下一步（等 IPA）
+## 下一步（等更高版本 IPA 做真实验证）
 
-1. **Build Upload API 上传到 TestFlight**：`POST /v1/buildUploads` → `POST /v1/buildUploadFiles`
-   → 分片 PUT → `PATCH uploaded=true` → 轮询至 `VALID`。已实测 `CREATE` 允许，**Windows 可直传**
-2. **提审**：`reviewSubmissions` + `reviewSubmissionItems` + 写 `whatsNew`；含「已在审核中则拒绝重复提审」防呆
+1. ~~Build Upload / reviewSubmissions 逻辑~~：已写完；无 `--execute` 不写商店
+2. 用新 IPA：`ipa-check` → `upload-submit`（先无 `--execute`）→ 确认后再加 `--execute`
 3. **盯盘接入 iOS**：`watch` / `serve` 心跳通知（Apple 用版本号而非 versionCode）
 
 ## 明确不做

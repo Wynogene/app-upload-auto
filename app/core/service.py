@@ -37,7 +37,7 @@ def _maybe_register_watch(result: OperationResult, req_track: str | None = None)
         platform="android",
         version_code=vc,
         track="production",
-        heartbeat_hours=12.0,
+        heartbeat_hours=0.0,
         note="auto after production submit",
     )
     hint = watch_hint_command(app_id, vc, "android")
@@ -97,7 +97,7 @@ class AppReleaseService:
     def upload_and_submit(self, req: UploadRequest) -> list[OperationResult]:
         """
         Android: upload already assigns track+commit，一次完成「上传并发布到轨道」.
-        iOS: upload then submit (submit still stub until ASC wired).
+        iOS: upload 后 submit；两者默认 dry-run，需 ``execute=True`` 才写 ASC。
         """
         upload_result = self.upload(req)
         if not upload_result.ok:
@@ -119,13 +119,16 @@ class AppReleaseService:
             )
             return [upload_result, follow]
 
+        details = upload_result.details or {}
         submit_req = SubmitRequest(
             app_id=req.app_id,
             platform=req.platform,
-            version_name=req.version_name,
+            version_name=req.version_name or details.get("version_name"),
+            build_id=details.get("build_id"),
             whats_new=req.whats_new,
             release_notes=req.release_notes,
             allow_production=req.allow_production,
+            execute=req.execute,
             operator_open_id=req.operator_open_id,
         )
         return [upload_result, self.submit(submit_req)]

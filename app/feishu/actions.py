@@ -19,11 +19,6 @@ ACTION_STATUS = "app_status"
 # Card-driven submit defaults to internal track (safe). Production needs explicit flags.
 _DEFAULT_CARD_TRACK = "internal"
 
-_IOS_UPLOAD_NOT_READY = (
-    "iOS 上传/提审尚未接通（Build Upload / reviewSubmissions）。"
-    "当前请用 ipa-check / status；Android 可用提审调试。"
-)
-
 
 def _platforms(raw: str | None, *, require_single: bool = False) -> list[Platform] | str:
     """Return platforms or an error string when require_single and value is missing/both."""
@@ -82,6 +77,8 @@ def _build_upload_request(
         version_name=value.get("version") or value.get("version_name"),
         track=track if platform == Platform.ANDROID else None,
         allow_production=allow_production,
+        # 卡片默认不写 ASC；需 value.execute=true 或 CLI --execute
+        execute=_truthy(value.get("execute")),
         operator_open_id=operator_open_id,
     )
 
@@ -124,19 +121,6 @@ def run_upload_submit_job(value: dict, operator_open_id: str | None = None) -> l
     all_results = []
 
     for platform in platforms:
-        if platform == Platform.IOS:
-            from app.models import OperationResult
-
-            all_results.append(
-                OperationResult(
-                    ok=False,
-                    app_id=str(app_id),
-                    platform=Platform.IOS,
-                    message=_IOS_UPLOAD_NOT_READY,
-                )
-            )
-            continue
-
         work_dir = None
         try:
             resolved = resolve_artifact(
@@ -220,8 +204,6 @@ def handle_card_action(value: dict, operator_open_id: str | None = None) -> dict
             platforms = _platforms(value.get("platform"), require_single=True)
             if isinstance(platforms, str):
                 return _toast("error", platforms)
-            if platforms == [Platform.IOS]:
-                return _toast("error", _IOS_UPLOAD_NOT_READY)
             if _truthy(value.get("preview_only")):
                 return _toast(
                     "info",
@@ -230,9 +212,13 @@ def handle_card_action(value: dict, operator_open_id: str | None = None) -> dict
             if not value.get("artifact_path") and not value.get("artifact_url"):
                 return _toast("error", "缺少 artifact_path 或 artifact_url")
 
-            # Pre-validate track safety before queueing
+            # Pre-validate track safety before queueing (Android)
             track = (value.get("track") or _DEFAULT_CARD_TRACK).strip().lower()
-            if track in {"production", "prod"} and not _truthy(value.get("allow_production")):
+            if (
+                platforms == [Platform.ANDROID]
+                and track in {"production", "prod"}
+                and not _truthy(value.get("allow_production"))
+            ):
                 return _toast(
                     "error",
                     "已拒绝：卡片提审默认仅 internal。正式轨需 allow_production=true",
@@ -257,6 +243,9 @@ def handle_card_action(value: dict, operator_open_id: str | None = None) -> dict
                 name=f"card-submit-{app_id}",
                 daemon=True,
             ).start()
+            if platforms == [Platform.IOS]:
+                mode = "真实写 ASC" if _truthy(value.get("execute")) else "dry-run 不写 ASC"
+                return _toast("info", f"已受理 iOS 上传/提审（{mode}），完成后私聊通知你")
             track_show = (value.get("track") or _DEFAULT_CARD_TRACK).strip() or _DEFAULT_CARD_TRACK
             return _toast(
                 "info",
@@ -306,6 +295,7 @@ def build_submit_card_value(
     track: str = _DEFAULT_CARD_TRACK,
     allow_production: bool = False,
     preview_only: bool = False,
+    execute: bool = False,
 ) -> dict[str, Any]:
     """Build contract-compatible button value for debug cards / CLI."""
     value: dict[str, Any] = {
@@ -326,4 +316,6 @@ def build_submit_card_value(
         value["allow_production"] = True
     if preview_only:
         value["preview_only"] = True
+    if execute:
+        value["execute"] = True
     return value
