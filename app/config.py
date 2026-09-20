@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     # 访问 Google API 的本地代理（httplib2 不会自动读系统代理）
     http_proxy: str = ""
     https_proxy: str = ""
+    # ai_support 仓库根目录（可选；只读 import utils_synology，不改对方代码）
+    ai_support_root: str = ""
+    # 群晖 FileStation（本仓库自实现下载分享包；推荐配置，避免依赖对方 boto3）
+    synology_base_url: str = "http://delivery.vaas.plus:5000"
+    synology_username: str = ""
+    synology_password: str = ""
 
     host: str = "127.0.0.1"  # 本机调试默认不对外
     port: int = 8088

@@ -241,12 +241,66 @@ def resolve_artifact(
 
     work = work_root or _new_work_dir()
     work.mkdir(parents=True, exist_ok=True)
+
+    # 群晖分享预览页：优先走 ai_support Synology 下载器（不改对方仓库）
+    from app.core.synology_share import download_share_to_dir, is_synology_share_url
+
+    if is_synology_share_url(artifact_url):
+        syn_path, syn_msg = download_share_to_dir(artifact_url, work / "synology")
+        if syn_path and syn_path.is_file():
+            if syn_path.suffix.lower() == ".zip":
+                root = extract_zip(syn_path, work / "unzipped")
+                selected = select_package_file(
+                    root,
+                    platform,
+                    package_or_bundle=package_or_bundle,
+                    version_hint=version_hint,
+                )
+                selected.work_dir = work
+                selected.source = "synology-zip"
+                selected.message = f"{syn_msg}；{selected.message}"
+                return selected
+            expected = ".aab" if platform == Platform.ANDROID else ".ipa"
+            if syn_path.suffix.lower() == expected:
+                return ArtifactResolveResult(
+                    ok=True,
+                    path=syn_path,
+                    message=syn_msg,
+                    source="synology",
+                    work_dir=work,
+                )
+            selected = select_package_file(
+                work / "synology",
+                platform,
+                package_or_bundle=package_or_bundle,
+                version_hint=version_hint,
+            )
+            selected.work_dir = work
+            selected.source = "synology"
+            if selected.ok:
+                selected.message = f"{syn_msg}；{selected.message}"
+                return selected
+            return ArtifactResolveResult(
+                ok=False,
+                message=f"{syn_msg}；但未找到可上传的包: {selected.message}",
+                source="synology",
+                work_dir=work,
+                candidates=selected.candidates,
+            )
+        logger.warning("synology download failed, fallback HTTP: {}", syn_msg)
+
     try:
         downloaded = download_url_to_dir(artifact_url, work / "download")
     except Exception as exc:  # noqa: BLE001
+        extra = ""
+        if is_synology_share_url(artifact_url):
+            extra = (
+                "（群晖分享页不能靠普通 HTTP 下载；请确认 AI_SUPPORT_ROOT 指向"
+                " ai_support 且本机可访问 delivery.vaas.plus:5000）"
+            )
         return ArtifactResolveResult(
             ok=False,
-            message=f"下载失败: {exc}",
+            message=f"下载失败: {exc}{extra}",
             source="url",
             work_dir=work,
         )

@@ -1,13 +1,17 @@
-"""App Store Connect 分阶段发布（Phased Release）只读辅助。
+"""App Store Connect 分阶段发布（Phased Release）辅助。
 
-与 Google Play 不同：iOS **不能自定义百分比**。提审前只选「是否开启分批」；
+与 Google Play 不同：iOS **不能自定义百分比**。提审前设定「是否开启分批」；
 开启后按 Apple 固定 7 天曲线自动抬升（仅对开启自动更新的用户）：
 
     Day1 1% → Day2 2% → Day3 5% → Day4 10% → Day5 20% → Day6 50% → Day7 100%
 
-API（只读 GET）::
+本工具提审时会 ``POST /v1/appStoreVersionPhasedReleases``（状态 INACTIVE），
+确保过审/手动发布后走分批，而不是接近全量。只读查询仍用 GET。
 
-    GET /v1/appStoreVersions/{id}/appStoreVersionPhasedRelease
+API::
+
+    GET  /v1/appStoreVersions/{id}/appStoreVersionPhasedRelease
+    POST /v1/appStoreVersionPhasedReleases
 
 字段：``phasedReleaseState`` / ``currentDayNumber`` / ``startDate`` /
 ``totalPauseDuration``。

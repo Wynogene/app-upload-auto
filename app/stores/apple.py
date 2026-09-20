@@ -230,9 +230,16 @@ class AppleStoreClient(StoreClient):
                 info["message"] += f"；但目标 App {target} 不在可见列表"
         return info
 
-    def preflight_ipa(self, app_cfg: dict, ipa_path: str | Path) -> dict:
+    def preflight_ipa(
+        self,
+        app_cfg: dict,
+        ipa_path: str | Path,
+        *,
+        require_asc: bool = False,
+    ) -> dict:
         """上传前校验：解析 IPA + 拉取 ASC 现状 + 跑三道硬校验。
 
+        ``require_asc=True``（``--execute`` 上传时）：ASC 拉取失败则直接失败，禁止降级。
         返回 {ok, meta, issues, message}；不抛异常（除了解析失败的友好错误）。
         """
         from app.stores.apple_preflight import (
@@ -253,7 +260,7 @@ class AppleStoreClient(StoreClient):
 
         out["meta"] = meta
 
-        # 收集 ASC 现状；拉取失败不阻断（退化为「只做本地能做的校验」）
+        # 收集 ASC 现状；require_asc 时失败则硬拦
         latest_released: str | None = None
         released_versions: set[str] = set()
         existing_builds: set[str] = set()
@@ -277,10 +284,20 @@ class AppleStoreClient(StoreClient):
                 }:
                     versions_in_review.add(vs)
             existing_builds = {
-                str(b.get("version")) for b in self.list_builds(app_cfg, limit=100) if b.get("version")
+                str(b.get("version"))
+                for b in self.list_builds(app_cfg, limit=100)
+                if b.get("version")
             }
         except Exception as exc:  # noqa: BLE001
-            logger.warning("preflight: 拉取 ASC 现状失败, 降级为本地校验: {}", exc)
+            logger.warning("preflight: 拉取 ASC 现状失败: {}", exc)
+            if require_asc:
+                out["ok"] = False
+                out["message"] = (
+                    f"未能读取 ASC 现状（{exc}），已阻止上传。"
+                    "真实上传（--execute）必须查商店后再比对版本/构建号。"
+                )
+                out["asc_required"] = True
+                return out
             notes.append(f"未能读取 ASC 现状（{exc}），以下校验不含线上比对")
 
         issues = check_ipa_preflight(
@@ -339,7 +356,7 @@ class AppleStoreClient(StoreClient):
                 details={"artifact_url": artifact_url},
             )
 
-        pre = self.preflight_ipa(app_cfg, artifact)
+        pre = self.preflight_ipa(app_cfg, artifact, require_asc=bool(req.execute))
         meta = pre.get("meta")
         version_name = req.version_name or getattr(meta, "version_name", None)
         build_number = req.build_number or getattr(meta, "build_number", None)
@@ -875,6 +892,7 @@ class AppleStoreClient(StoreClient):
                         "processing_state": a.get("processingState"),
                         "expired": a.get("expired"),
                         "uploaded_date": a.get("uploadedDate"),
+                        "uses_non_exempt_encryption": a.get("usesNonExemptEncryption"),
                     }
                 )
             return out

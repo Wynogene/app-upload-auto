@@ -49,8 +49,53 @@ def _normalize_track(track: str) -> str:
     return "production" if t == "prod" else t
 
 
+def is_retryable_media_upload_error(exc: BaseException) -> bool:
+    """卡住 / 分片失败 / 常见传输故障 → 可整包重试。"""
+    text = str(exc)
+    if "无字节进度" in text or "判定卡住" in text or "上传分片失败" in text:
+        return True
+    lower = text.lower()
+    return any(
+        h in lower
+        for h in (
+            "timeout",
+            "timed out",
+            "connection",
+            "proxy",
+            "ssl",
+            "reset",
+            "unavailable",
+            "503",
+            "502",
+            "429",
+        )
+    )
+
+
 def _format_mib(num_bytes: int | float) -> str:
     return f"{float(num_bytes) / (1024 * 1024):.1f}"
+
+
+def list_edit_bundle_version_codes(
+    service: Any, package_name: str, edit_id: str
+) -> set[str]:
+    """列出当前 edit 可见的已上传 bundle versionCode（含历史已入库的包）。"""
+    try:
+        payload = (
+            service.edits()
+            .bundles()
+            .list(packageName=package_name, editId=edit_id)
+            .execute(num_retries=2)
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("list bundles failed: {}", exc)
+        return set()
+    out: set[str] = set()
+    for b in payload.get("bundles") or []:
+        vc = b.get("versionCode")
+        if vc is not None:
+            out.add(str(vc))
+    return out
 
 
 def execute_resumable_media_upload(
@@ -59,11 +104,17 @@ def execute_resumable_media_upload(
     total_size: int,
     label: str = "bundle",
     num_retries: int = 5,
+    stall_timeout_seconds: float = 180.0,
 ) -> Any:
     """执行可续传媒体上传，并按已传 MB（兼百分比）打进度日志。
 
     googleapiclient 的 ``.execute()`` 不会回调进度；大 AAB 需 ``next_chunk`` 循环。
+
+    若 ``stall_timeout_seconds`` 内已传字节数无增长，判定卡死并抛错
+    （避免线程长时间空转、流量为 0 却一直挂着）。
     """
+    import time
+
     total = max(int(total_size or 0), 0)
     total_note = _format_mib(total) if total else "?"
     logger.info(
@@ -73,17 +124,46 @@ def execute_resumable_media_upload(
     )
     response = None
     last_logged_bytes = -1
+    last_done = 0
+    last_progress_at = time.time()
     # 至少每约 8MiB 打一条，避免刷屏；收尾必打
     log_every = 8 * 1024 * 1024
     while response is None:
-        progress, response = request.next_chunk(num_retries=num_retries)
+        try:
+            progress, response = request.next_chunk(num_retries=num_retries)
+        except Exception as exc:  # noqa: BLE001
+            # 底层已按 num_retries 重试；仍失败则视为传包异常
+            raise RuntimeError(
+                f"Google {label} 上传分片失败（可能网络中断/代理无流量）: {exc}"
+            ) from exc
         if progress is None:
+            if (
+                stall_timeout_seconds > 0
+                and (time.time() - last_progress_at) > stall_timeout_seconds
+            ):
+                raise RuntimeError(
+                    f"Google {label} 上传超过 {int(stall_timeout_seconds)}s "
+                    f"无字节进度（已停在 {_format_mib(last_done)} MB），"
+                    "判定卡住；请检查网络/代理后重试（支持断点续传会话需重新发起上传）。"
+                )
             continue
         done = int(getattr(progress, "resumable_progress", 0) or 0)
         known_total = int(getattr(progress, "total_size", 0) or 0) or total
         if known_total and total != known_total:
             total = known_total
             total_note = _format_mib(total)
+        if done > last_done:
+            last_done = done
+            last_progress_at = time.time()
+        elif (
+            stall_timeout_seconds > 0
+            and (time.time() - last_progress_at) > stall_timeout_seconds
+        ):
+            raise RuntimeError(
+                f"Google {label} 上传超过 {int(stall_timeout_seconds)}s "
+                f"无字节进度（已停在 {_format_mib(last_done)} MB），"
+                "判定卡住；请检查网络/代理后重试。"
+            )
         should_log = (
             done >= total > 0
             or last_logged_bytes < 0
@@ -504,203 +584,305 @@ class GoogleStoreClient(StoreClient):
                     },
                 )
 
-        edit_id = None
-        service = None
-        try:
-            service = self._publisher(app_cfg, timeout=600)
-            edit = service.edits().insert(packageName=package_name, body={}).execute(
-                num_retries=3
-            )
-            edit_id = edit["id"]
-            logger.info("created edit_id={}", edit_id)
+        # 卡住/传输失败后整包重试；每次重试前再查商店，避免「其实已上传成功」又传一遍
+        max_full_attempts = 3
+        last_exc: BaseException | None = None
+        recovered_note = ""
 
-            if aab_meta is not None:
-                tracks = (
-                    service.edits()
-                    .tracks()
-                    .list(packageName=package_name, editId=edit_id)
-                    .execute(num_retries=3)
-                )
-                used = collect_track_version_codes(tracks)
-                if aab_meta.version_code in used:
-                    service.edits().delete(
-                        packageName=package_name, editId=edit_id
-                    ).execute(num_retries=2)
-                    edit_id = None
-                    return OperationResult(
-                        ok=False,
-                        app_id=req.app_id,
-                        platform=Platform.ANDROID,
-                        message=(
-                            f"上传前校验失败：versionCode {aab_meta.version_code}"
-                            f"（{aab_meta.version_name or '-'}）已出现在当前轨道中。"
-                            f"请换更高 versionCode 的新 AAB；若只需推进已有版本，用 "
-                            f"`release --version-code {aab_meta.version_code}`。"
-                        ),
-                        details={
-                            "package_name": package_name,
-                            "track": track,
-                            "artifact": str(aab_path),
-                            "aab_version_code": aab_meta.version_code,
-                            "aab_version_name": aab_meta.version_name,
-                            "track_version_codes_sample": sorted(
-                                used, key=lambda x: int(x) if x.isdigit() else 0
-                            )[-12:],
-                        },
-                    )
-
-            media = MediaFileUpload(
-                str(aab_path),
-                mimetype="application/octet-stream",
-                resumable=True,
-                chunksize=8 * 1024 * 1024,
-            )
-            upload_retries = 5
-            artifact_size = aab_path.stat().st_size
-            if aab_path.suffix.lower() == ".aab":
-                upload_req = (
-                    service.edits()
-                    .bundles()
-                    .upload(
-                        packageName=package_name,
-                        editId=edit_id,
-                        media_body=media,
-                    )
-                )
-                bundle = execute_resumable_media_upload(
-                    upload_req,
-                    total_size=artifact_size,
-                    label="aab",
-                    num_retries=upload_retries,
-                )
-                version_code = bundle.get("versionCode")
-                upload_kind = "aab"
-            else:
-                upload_req = (
-                    service.edits()
-                    .apks()
-                    .upload(
-                        packageName=package_name,
-                        editId=edit_id,
-                        media_body=media,
-                    )
-                )
-                apk = execute_resumable_media_upload(
-                    upload_req,
-                    total_size=artifact_size,
-                    label="apk",
-                    num_retries=upload_retries,
-                )
-                version_code = apk.get("versionCode")
-                upload_kind = "apk"
-
-            if version_code is None:
-                raise RuntimeError("上传成功但未返回 versionCode")
-
-            track_resp = self._assign_track(
-                service,
-                package_name=package_name,
-                edit_id=edit_id,
-                track=track,
-                version_code=version_code,
-                release_notes=release_notes,
-                release_status=upload_status,
-                user_fraction=rollout_fraction if staged else None,
-            )
-            commit = service.edits().commit(
-                packageName=package_name,
-                editId=edit_id,
-            ).execute(num_retries=3)
+        for attempt in range(1, max_full_attempts + 1):
             edit_id = None
-
-            review_state = (
-                ReviewState.WAITING_FOR_REVIEW
-                if track == "production"
-                else ReviewState.RELEASED
-            )
-            where = {
-                "internal": "Play Console → 测试 → 内部测试",
-                "alpha": "Play Console → 测试 → 封闭式测试(alpha)",
-                "beta": "Play Console → 测试 → 开放式测试(beta)",
-                "production": "Play Console → 正式版（可能进入审核）",
-            }.get(track, track)
-
-            notes_note = ""
-            if notes_source == "default":
-                from app.stores.release_notes import resolve_default_text
-
-                notes_note = (
-                    f"（版本说明使用默认文案：{resolve_default_text(app_cfg)}）"
+            service = None
+            skip_binary_upload = False
+            version_code: Any = None
+            upload_kind = "aab" if aab_path.suffix.lower() == ".aab" else "apk"
+            try:
+                service = self._publisher(app_cfg, timeout=600)
+                edit = service.edits().insert(packageName=package_name, body={}).execute(
+                    num_retries=3
                 )
-            elif notes_source is None:
-                notes_note = "（未提供版本说明，商店不会展示「新版本亮点」）"
-
-            if staged:
-                default_note = (
-                    "（使用配置默认放量）" if rollout_source == "default" else ""
+                edit_id = edit["id"]
+                logger.info(
+                    "created edit_id={} attempt={}/{}",
+                    edit_id,
+                    attempt,
+                    max_full_attempts,
                 )
-                rollout_note = (
-                    f"已按 {describe_rollout(rollout_fraction)} 放量{default_note}"
-                    f"（{where}）。"
-                    f"确认稳定后可续推，例如：\n"
-                    f"  python cli.py release --app-id {req.app_id} "
-                    f"--platform android --version-code {version_code} "
-                    f"--track production --rollout 50 --allow-production\n"
-                    f"全量则用 --rollout 100。"
-                )
-            else:
-                rollout_note = f"请到 {where} 查看。"
 
-            return OperationResult(
-                ok=True,
-                app_id=req.app_id,
-                platform=Platform.ANDROID,
-                review_state=review_state,
-                message=(
-                    f"已上传并发布到 `{track}`，versionCode={version_code}。"
-                    f"{notes_note}"
-                    f"{rollout_note}"
-                ),
-                details={
-                    "package_name": package_name,
-                    "track": track,
-                    "version_code": version_code,
-                    "upload_kind": upload_kind,
-                    "artifact": str(aab_path),
-                    "release_notes": release_notes,
-                    "release_notes_source": notes_source,
-                    "rollout": describe_rollout(rollout_fraction),
-                    "rollout_fraction": rollout_fraction,
-                    "rollout_source": rollout_source,
-                    "user_fraction": rollout_fraction if staged else None,
-                    "track_response": track_resp,
-                    "commit": commit,
-                },
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("google.upload error")
-            if service is not None and edit_id is not None:
-                try:
-                    service.edits().delete(packageName=package_name, editId=edit_id).execute(
-                        num_retries=2
+                if aab_meta is not None:
+                    tracks = (
+                        service.edits()
+                        .tracks()
+                        .list(packageName=package_name, editId=edit_id)
+                        .execute(num_retries=3)
                     )
-                    logger.info("discarded failed edit_id={}", edit_id)
-                except Exception:  # noqa: BLE001
-                    logger.warning("failed to discard edit_id={}", edit_id)
-            return OperationResult(
-                ok=False,
-                app_id=req.app_id,
-                platform=Platform.ANDROID,
-                message=format_google_upload_error(exc),
-                details={
-                    "package_name": package_name,
-                    "track": track,
-                    "artifact": str(aab_path),
-                    "aab_version_code": aab_meta.version_code if aab_meta else None,
-                    "aab_version_name": aab_meta.version_name if aab_meta else None,
-                    "error_type": type(exc).__name__,
-                },
-            )
+                    used = collect_track_version_codes(tracks)
+                    bundle_codes = list_edit_bundle_version_codes(
+                        service, package_name, edit_id
+                    )
+                    vc_str = str(aab_meta.version_code)
+
+                    if vc_str in used:
+                        service.edits().delete(
+                            packageName=package_name, editId=edit_id
+                        ).execute(num_retries=2)
+                        edit_id = None
+                        if attempt == 1:
+                            return OperationResult(
+                                ok=False,
+                                app_id=req.app_id,
+                                platform=Platform.ANDROID,
+                                message=(
+                                    f"上传前校验失败：versionCode {aab_meta.version_code}"
+                                    f"（{aab_meta.version_name or '-'}）已出现在当前轨道中。"
+                                    f"请换更高 versionCode 的新 AAB；若只需推进已有版本，用 "
+                                    f"`release --version-code {aab_meta.version_code}`。"
+                                ),
+                                details={
+                                    "package_name": package_name,
+                                    "track": track,
+                                    "artifact": str(aab_path),
+                                    "aab_version_code": aab_meta.version_code,
+                                    "aab_version_name": aab_meta.version_name,
+                                    "track_version_codes_sample": sorted(
+                                        used,
+                                        key=lambda x: int(x) if x.isdigit() else 0,
+                                    )[-12:],
+                                },
+                            )
+                        # 重试前校验发现已在轨道：先前卡住实际已成功提交
+                        return OperationResult(
+                            ok=True,
+                            app_id=req.app_id,
+                            platform=Platform.ANDROID,
+                            review_state=(
+                                ReviewState.WAITING_FOR_REVIEW
+                                if track == "production"
+                                else ReviewState.RELEASED
+                            ),
+                            message=(
+                                f"重试前校验：versionCode={aab_meta.version_code} "
+                                f"已在商店轨道中，判定先前上传实际已成功，跳过重复上传。"
+                            ),
+                            details={
+                                "package_name": package_name,
+                                "track": track,
+                                "version_code": aab_meta.version_code,
+                                "artifact": str(aab_path),
+                                "recovered_from_stall": True,
+                                "attempt": attempt,
+                            },
+                        )
+
+                    if vc_str in bundle_codes:
+                        # 二进制已在 Play，只需挂轨提交（含卡住后重试发现已入库）
+                        skip_binary_upload = True
+                        version_code = aab_meta.version_code
+                        recovered_note = (
+                            f"（检测到 versionCode={vc_str} 已在 Play 包库，跳过重复传包）"
+                        )
+                        logger.info(
+                            "skip binary upload: versionCode {} already in bundles",
+                            vc_str,
+                        )
+
+                if not skip_binary_upload:
+                    media = MediaFileUpload(
+                        str(aab_path),
+                        mimetype="application/octet-stream",
+                        resumable=True,
+                        chunksize=8 * 1024 * 1024,
+                    )
+                    upload_retries = 5
+                    artifact_size = aab_path.stat().st_size
+                    if aab_path.suffix.lower() == ".aab":
+                        upload_req = (
+                            service.edits()
+                            .bundles()
+                            .upload(
+                                packageName=package_name,
+                                editId=edit_id,
+                                media_body=media,
+                            )
+                        )
+                        bundle = execute_resumable_media_upload(
+                            upload_req,
+                            total_size=artifact_size,
+                            label="aab",
+                            num_retries=upload_retries,
+                        )
+                        version_code = bundle.get("versionCode")
+                        upload_kind = "aab"
+                    else:
+                        upload_req = (
+                            service.edits()
+                            .apks()
+                            .upload(
+                                packageName=package_name,
+                                editId=edit_id,
+                                media_body=media,
+                            )
+                        )
+                        apk = execute_resumable_media_upload(
+                            upload_req,
+                            total_size=artifact_size,
+                            label="apk",
+                            num_retries=upload_retries,
+                        )
+                        version_code = apk.get("versionCode")
+                        upload_kind = "apk"
+
+                    if version_code is None:
+                        raise RuntimeError("上传成功但未返回 versionCode")
+
+                track_resp = self._assign_track(
+                    service,
+                    package_name=package_name,
+                    edit_id=edit_id,
+                    track=track,
+                    version_code=version_code,
+                    release_notes=release_notes,
+                    release_status=upload_status,
+                    user_fraction=rollout_fraction if staged else None,
+                )
+                commit = service.edits().commit(
+                    packageName=package_name,
+                    editId=edit_id,
+                ).execute(num_retries=3)
+                edit_id = None
+
+                review_state = (
+                    ReviewState.WAITING_FOR_REVIEW
+                    if track == "production"
+                    else ReviewState.RELEASED
+                )
+                where = {
+                    "internal": "Play Console → 测试 → 内部测试",
+                    "alpha": "Play Console → 测试 → 封闭式测试(alpha)",
+                    "beta": "Play Console → 测试 → 开放式测试(beta)",
+                    "production": "Play Console → 正式版（可能进入审核）",
+                }.get(track, track)
+
+                notes_note = ""
+                if notes_source == "default":
+                    from app.stores.release_notes import resolve_default_text
+
+                    notes_note = (
+                        f"（版本说明使用默认文案：{resolve_default_text(app_cfg)}）"
+                    )
+                elif notes_source is None:
+                    notes_note = "（未提供版本说明，商店不会展示「新版本亮点」）"
+
+                if staged:
+                    default_note = (
+                        "（使用配置默认放量）" if rollout_source == "default" else ""
+                    )
+                    rollout_note = (
+                        f"已按 {describe_rollout(rollout_fraction)} 放量{default_note}"
+                        f"（{where}）。"
+                        f"确认稳定后可续推，例如：\n"
+                        f"  python cli.py release --app-id {req.app_id} "
+                        f"--platform android --version-code {version_code} "
+                        f"--track production --rollout 50 --allow-production\n"
+                        f"全量则用 --rollout 100。"
+                    )
+                else:
+                    rollout_note = f"请到 {where} 查看。"
+
+                attempt_note = (
+                    f"（第 {attempt} 次尝试成功{recovered_note}）"
+                    if attempt > 1 or recovered_note
+                    else ""
+                )
+                return OperationResult(
+                    ok=True,
+                    app_id=req.app_id,
+                    platform=Platform.ANDROID,
+                    review_state=review_state,
+                    message=(
+                        f"已上传并发布到 `{track}`，versionCode={version_code}。"
+                        f"{attempt_note}"
+                        f"{notes_note}"
+                        f"{rollout_note}"
+                    ),
+                    details={
+                        "package_name": package_name,
+                        "track": track,
+                        "version_code": version_code,
+                        "upload_kind": upload_kind,
+                        "artifact": str(aab_path),
+                        "release_notes": release_notes,
+                        "release_notes_source": notes_source,
+                        "rollout": describe_rollout(rollout_fraction),
+                        "rollout_fraction": rollout_fraction,
+                        "rollout_source": rollout_source,
+                        "user_fraction": rollout_fraction if staged else None,
+                        "track_response": track_resp,
+                        "commit": commit,
+                        "attempt": attempt,
+                        "skipped_binary_upload": skip_binary_upload,
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                logger.exception(
+                    "google.upload error attempt={}/{}", attempt, max_full_attempts
+                )
+                if service is not None and edit_id is not None:
+                    try:
+                        service.edits().delete(
+                            packageName=package_name, editId=edit_id
+                        ).execute(num_retries=2)
+                        logger.info("discarded failed edit_id={}", edit_id)
+                    except Exception:  # noqa: BLE001
+                        logger.warning("failed to discard edit_id={}", edit_id)
+                    edit_id = None
+
+                # 「version code already used」：可能上次已传上，下一轮靠校验恢复
+                already_used = "already been used" in str(exc).lower()
+                can_retry = (
+                    attempt < max_full_attempts
+                    and (is_retryable_media_upload_error(exc) or already_used)
+                )
+                if can_retry:
+                    logger.warning(
+                        "upload will re-validate store then full retry ({}/{}): {}",
+                        attempt + 1,
+                        max_full_attempts,
+                        exc,
+                    )
+                    continue
+                return OperationResult(
+                    ok=False,
+                    app_id=req.app_id,
+                    platform=Platform.ANDROID,
+                    message=format_google_upload_error(exc),
+                    details={
+                        "package_name": package_name,
+                        "track": track,
+                        "artifact": str(aab_path),
+                        "aab_version_code": aab_meta.version_code if aab_meta else None,
+                        "aab_version_name": aab_meta.version_name if aab_meta else None,
+                        "error_type": type(exc).__name__,
+                        "attempt": attempt,
+                    },
+                )
+
+        return OperationResult(
+            ok=False,
+            app_id=req.app_id,
+            platform=Platform.ANDROID,
+            message=format_google_upload_error(
+                last_exc or RuntimeError("上传失败且已用尽重试")
+            ),
+            details={
+                "package_name": package_name,
+                "track": track,
+                "artifact": str(aab_path),
+                "aab_version_code": aab_meta.version_code if aab_meta else None,
+                "aab_version_name": aab_meta.version_name if aab_meta else None,
+                "attempts": max_full_attempts,
+            },
+        )
 
     def submit(self, req: SubmitRequest, app_cfg: dict) -> OperationResult:
         """Promote an existing versionCode to a track (发布/送审)."""
