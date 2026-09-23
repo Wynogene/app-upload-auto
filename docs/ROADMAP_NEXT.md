@@ -47,13 +47,14 @@
 - 群晖分享链下载（`SYNOLOGY_*`，不改 ai_support）
 - Android 正式轨默认约 5% 分批；上传卡住可整包重试
 - serve 启动轮询不阻塞 `/health`；重启后可用 `check-serve-watch.ps1` 恢复
+- iOS `--execute` 提审成功后自动登记盯盘（对齐 Android 正式轨）
 
 ## 下一步
 
-1. iOS 提审成功后**自动登记盯盘**（对齐 Android 正式轨）
-2. 与 `ai_support` 合并：按契约接发卡按钮 / 群晖（本仓已可独立用 `SYNOLOGY_*`）
-3. 运营化：稳定后再按 [OPS_PERSONAL_ONLY.md](./OPS_PERSONAL_ONLY.md) 评估是否关个人模式
-4. 可选：iOS 提审中途续跑指引、挂构建防覆盖等防呆
+1. 与 `ai_support` 合并：按契约接发卡按钮 / 群晖（本仓已可独立用 `SYNOLOGY_*`）
+2. 运营化：稳定后再按 [OPS_PERSONAL_ONLY.md](./OPS_PERSONAL_ONLY.md) 评估是否关个人模式
+3. 可选：iOS 提审中途续跑指引、挂构建防覆盖等防呆
+4. 可选：盯盘卡片展示「开始放量」时间（iOS `startDate`）
 
 ## 明确不做
 

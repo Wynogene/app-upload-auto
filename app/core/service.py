@@ -5,6 +5,7 @@ from loguru import logger
 from app.config import get_app_by_id
 from app.core.watch_targets import (
     ANDROID_HINT,
+    IOS_HINT,
     upsert_target,
     watch_hint_command,
 )
@@ -20,33 +21,74 @@ from app.stores import AppleStoreClient, GoogleStoreClient
 
 
 def _maybe_register_watch(result: OperationResult, req_track: str | None = None) -> str | None:
-    """On successful production Android submit/upload, persist watch target + return CLI hint."""
-    if not result.ok or result.platform != Platform.ANDROID:
+    """提审/正式轨上传成功后登记盯盘，并返回 CLI 提示文案。
+
+    - Android：production 上传/提审成功（写 Play）
+    - iOS：``execute=True`` 且提审成功（dry-run 不登记）
+    """
+    if not result.ok or not result.platform:
         return None
     details = result.details or {}
-    track = str(details.get("track") or req_track or "").lower()
-    if track not in {"production", "prod"}:
-        return None
-    version_code = details.get("version_code")
-    if version_code is None:
-        return None
-    vc = str(version_code)
     app_id = result.app_id or ""
-    upsert_target(
-        app_id=app_id,
-        platform="android",
-        version_code=vc,
-        track="production",
-        heartbeat_hours=0.0,
-        note="auto after production submit",
-    )
-    hint = watch_hint_command(app_id, vc, "android")
-    logger.info("watch target registered app={} versionCode={}", app_id, vc)
-    return (
-        f"已登记盯盘目标 versionCode={vc}（同 App 更旧的正式轨 Android 盯盘会自动停掉）。"
-        f"建议立刻执行:\n  {hint}\n"
-        f"（{ANDROID_HINT}）"
-    )
+
+    if result.platform == Platform.ANDROID:
+        track = str(details.get("track") or req_track or "").lower()
+        if track not in {"production", "prod"}:
+            return None
+        version_code = details.get("version_code")
+        if version_code is None:
+            return None
+        vc = str(version_code)
+        upsert_target(
+            app_id=app_id,
+            platform="android",
+            version_code=vc,
+            track="production",
+            heartbeat_hours=0.0,
+            note="auto after production submit",
+        )
+        hint = watch_hint_command(app_id, vc, "android")
+        logger.info("watch target registered app={} versionCode={}", app_id, vc)
+        return (
+            f"已登记盯盘目标 versionCode={vc}（同 App 更旧的正式轨 Android 盯盘会自动停掉）。"
+            f"建议立刻执行:\n  {hint}\n"
+            f"（{ANDROID_HINT}）"
+        )
+
+    if result.platform == Platform.IOS:
+        # dry-run / 未真正写 ASC 不登记
+        if details.get("dry_run") or not details.get("execute"):
+            return None
+        version = (
+            details.get("version_name")
+            or details.get("version_string")
+            or details.get("version")
+        )
+        note = "auto after ios submit"
+        if version:
+            note = f"{note} {version}"
+        upsert_target(
+            app_id=app_id,
+            platform="ios",
+            version_code=None,
+            track="production",
+            heartbeat_hours=0.0,
+            note=note,
+        )
+        hint = watch_hint_command(app_id, None, "ios")
+        logger.info(
+            "watch target registered app={} platform=ios version={}",
+            app_id,
+            version or "-",
+        )
+        ver_bit = f" version={version}" if version else ""
+        return (
+            f"已登记 iOS 盯盘目标{ver_bit}（同 App 仅保留一条 iOS 盯盘，会覆盖旧登记）。"
+            f"常驻 serve 已开则无需再开 watch；临时加盯:\n  {hint}\n"
+            f"（{IOS_HINT}）"
+        )
+
+    return None
 
 
 class AppReleaseService:
@@ -87,7 +129,11 @@ class AppReleaseService:
         app = self._app(req.app_id)
         self._ensure_allowed(app, req.operator_open_id)
         if req.platform == Platform.IOS:
-            return self.apple.submit(req, app)
+            result = self.apple.submit(req, app)
+            hint = _maybe_register_watch(result)
+            if hint:
+                result.message = f"{result.message}\n{hint}"
+            return result
         result = self.google.submit(req, app)
         hint = _maybe_register_watch(result, req.track)
         if hint:

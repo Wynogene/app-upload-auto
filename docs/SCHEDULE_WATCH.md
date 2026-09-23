@@ -76,7 +76,7 @@ powershell -File .\scripts\windows\start-serve-watch.ps1
 
 ## 行为
 
-- 优先扫描 `data/watch_targets.json` 里**已登记**的盯盘目标（Android 正式轨提审成功或手动 `watch` 会写入；**iOS 提审后目前需手动登记**）。
+- 优先扫描 `data/watch_targets.json` 里**已登记**的盯盘目标（Android 正式轨 / iOS `--execute` 提审成功，或手动 `watch` 会写入）。
 - 指纹变化 → 飞书通知（专用标题优先）：过审/待你发布、被拒、Android 放量变更、iOS 分批进度、iOS 合规/合同卡住、构建失效或长时间 PROCESSING。
 - **政策状态页**（Play「政策状态」）API 读不到，需人工看 Console + 邮件；工具只在 footer 提示。
 - 默认 **不发心跳**（`heartbeat_hours=0`）；仅状态/放量变化时通知。若要心跳：`--heartbeat-hours 12`。

@@ -35,10 +35,11 @@ blurams / boykeep 把 `--app-id` 换成对应 id 即可。
 ### iOS
 
 ```powershell
-# 须 --execute 才写 ASC；成功后建议手动登记盯盘
+# 须 --execute 才写 ASC；成功后自动登记盯盘（常驻 serve 会扫）
 python cli.py upload-submit --app-id blurams --platform ios `
   --artifact "F:\upload-test\新包.ipa" --execute --notify
 
+# 若未自动登记或要临时加盯：
 python cli.py watch --app-id blurams --platform ios `
   --once --heartbeat-hours 0 --notify
 ```

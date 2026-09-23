@@ -40,7 +40,7 @@ python cli.py apps-ready --app-id boykeep
 ## 登记盯盘（只读轮询）
 
 ```powershell
-# iOS（无需 version-code）；提审后建议手动登记（尚未自动写 watch_targets）
+# iOS（无需 version-code）；`--execute` 提审成功后会自动登记
 python cli.py watch --app-id blurams --platform ios --once --heartbeat-hours 0 --no-notify
 # Android（需线上 versionCode）；正式轨 upload-submit 成功后一般会自动登记
 python cli.py watch --app-id blurams --platform android --version-code <码> --once --heartbeat-hours 0 --no-notify

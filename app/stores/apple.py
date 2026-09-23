@@ -559,6 +559,8 @@ class AppleStoreClient(StoreClient):
         plan.steps = build_review_plan_steps(plan)
         details = {
             "app_store_app_id": app_store_app_id,
+            "version_name": str(version_name),
+            "version_string": str(version_name),
             "release_notes": notes,
             "release_notes_source": notes_source,
             "planned_steps": plan.steps,

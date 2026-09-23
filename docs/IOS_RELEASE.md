@@ -10,7 +10,7 @@
 | 上传前校验 `ipa-check` | ✅ | — |
 | IPA 上传到 TestFlight | ✅ 默认 dry-run；`--execute` 才写 ASC；长传自动刷新 JWT | Transporter / Xcode 仍可用 |
 | 提审 `reviewSubmissions` | ✅ 默认 dry-run；`--execute`；默认开 7 天分批 | ASC 网页可提审 |
-| 状态 / 分批盯盘 | ✅ 只读；提审后建议手动 `watch`（尚未自动登记） | — |
+| 状态 / 分批盯盘 | ✅ 只读；`--execute` 提审成功后自动登记 | — |
 | 点「发布给用户 / 全量 / 暂停分批」 | ❌ **永不代点** | 需运营在 ASC 操作 |
 
 ---

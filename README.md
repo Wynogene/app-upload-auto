@@ -17,7 +17,7 @@ iOS 写商店须显式加 **`--execute`**（默认 dry-run）。
 | 状态 / 过审生命周期 | ✅ `status` + lifecycle | ✅ `status`（含分批进度） |
 | 上传前校验 | ✅ AAB 包名 / versionCode 查重等 | ✅ `ipa-check`；`--execute` 时 ASC 现状硬校验 |
 | 包来源 | 本地 path；群晖分享链可解析下载 | 同左（`SYNOLOGY_*` / 可选 `AI_SUPPORT_ROOT`） |
-| 盯盘通知 | ✅ `watch` / `serve`；正式轨成功后自动登记 | ✅ 同上（提审后建议手动 `watch --platform ios`） |
+| 盯盘通知 | ✅ `watch` / `serve`；正式轨成功后自动登记 | ✅ 同上；**`--execute` 提审成功后自动登记** |
 | 运营向飞书文案 | ✅ 风格 D 字段表 | ✅ 版本精确到构建号 |
 | 真机验证 | ✅ 多 App 正式轨可用 | ✅ 已用 blurams 更高版本 IPA 跑通上传+提审 |
 
@@ -94,8 +94,7 @@ python cli.py upload-submit --app-id blurams --platform android `
 # iOS：上传+提审（默认 dry-run；真写商店加 --execute）
 python cli.py upload-submit --app-id blurams --platform ios `
   --artifact "F:\upload-test\xxx.ipa" --execute --notify
-# 提审后建议登记盯盘：
-python cli.py watch --app-id blurams --platform ios --once --heartbeat-hours 0 --notify
+# 提审成功会自动登记 iOS 盯盘；常驻 serve 已开则一般不必再手动 watch
 
 # 群晖分享链选型（不写商店）
 python cli.py card-run --app-id blurams --platform ios `
@@ -165,7 +164,7 @@ data/             # watch_targets.json（本地运行态，勿提交密钥）
 
 ## 下一步（建议优先级）
 
-1. iOS 提审成功后**自动登记盯盘**（对齐 Android 正式轨行为）  
-2. 与 `ai_support` 合并窗口：按契约接发卡按钮 / 群晖下载（本仓库侧已可独立用 `SYNOLOGY_*`）  
-3. 运营化：稳定后再按 OPS 清单评估是否关个人模式、改发群（默认不做）  
-4. 可选：iOS 提审失败中途的续跑指引、挂构建防覆盖等防呆增强
+1. 与 `ai_support` 合并窗口：按契约接发卡按钮 / 群晖下载（本仓库侧已可独立用 `SYNOLOGY_*`）  
+2. 运营化：稳定后再按 OPS 清单评估是否关个人模式、改发群（默认不做）  
+3. 可选：iOS 提审失败中途的续跑指引、挂构建防覆盖等防呆增强  
+4. 可选：盯盘卡片展示「开始放量」时间（iOS 有 `startDate`；Android API 弱）

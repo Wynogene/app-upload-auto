@@ -88,15 +88,15 @@ python cli.py ios-whats-new --app-id blurams                              # 提�
 # python cli.py ios-whats-new --app-id blurams --version 5.1049.128 --apply  # 确认后再写
 python cli.py status --app-id blurams --platform ios --no-notify
 
-# dry-run（默认，不写 ASC）
+# dry-run（默认，不写 ASC；不登记盯盘）
 python cli.py upload-submit --app-id blurams --platform ios `
   --artifact "F:\upload-test\xxx.ipa" --notify
 
-# 真写商店（显式 --execute）；提审默认开 7 天分批；长传会自动刷新 JWT
+# 真写商店（显式 --execute）；提审默认开 7 天分批；成功后自动登记 iOS 盯盘
 python cli.py upload-submit --app-id blurams --platform ios `
   --artifact "F:\upload-test\xxx.ipa" --execute --notify
 
-# 提审后建议手动登记盯盘（尚未像 Android 正式轨那样自动写）
+# 常驻 serve 已开则一般不必再手动 watch；临时加盯：
 python cli.py watch --app-id blurams --platform ios --once --heartbeat-hours 0 --notify
 ```
 

@@ -281,7 +281,6 @@ python cli.py ipa-check --app-id blurams --ipa "F:\upload-test\xxx.ipa"
 # dry-run（不写商店）
 python cli.py upload-submit --app-id blurams --platform ios --artifact "F:\upload-test\xxx.ipa" --no-notify
 
-# 真正上传+提审（显式确认）；提审后建议手动 watch
+# 真正上传+提审（显式确认）；成功后自动登记 iOS 盯盘
 python cli.py upload-submit --app-id blurams --platform ios --artifact "F:\upload-test\xxx.ipa" --execute --notify
-python cli.py watch --app-id blurams --platform ios --once --heartbeat-hours 0 --notify
 ```
