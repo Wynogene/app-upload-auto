@@ -224,9 +224,22 @@ def handle_card_action(value: dict, operator_open_id: str | None = None) -> dict
                     "已拒绝：卡片提审默认仅 internal。正式轨需 allow_production=true",
                 )
 
-            def _job() -> None:
+            def _job(job_id: str | None = None) -> None:
                 try:
-                    run_upload_submit_job(value, operator_open_id)
+                    from app.core.submit_jobs import (
+                        enqueue_submit_job,
+                        process_submit_job,
+                        submit_jobs_enabled,
+                    )
+
+                    if submit_jobs_enabled():
+                        jid = job_id
+                        if not jid:
+                            job = enqueue_submit_job(value, operator_open_id)
+                            jid = job.id
+                        process_submit_job(jid)
+                    else:
+                        run_upload_submit_job(value, operator_open_id)
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("upload submit job failed")
                     try:
@@ -238,18 +251,46 @@ def handle_card_action(value: dict, operator_open_id: str | None = None) -> dict
                     except Exception:  # noqa: BLE001
                         logger.exception("notify_owner after job failure also failed")
 
+            # 去重尽量在 toast 前完成，避免连点双入队
+            reused_msg = ""
+            start_job_id: str | None = None
+            try:
+                from app.core.submit_jobs import (
+                    enqueue_submit_job,
+                    submit_jobs_enabled,
+                )
+
+                if submit_jobs_enabled():
+                    job = enqueue_submit_job(value, operator_open_id)
+                    start_job_id = job.id
+                    if getattr(job, "deduped", False):
+                        reused_msg = (
+                            f"（复用进行中作业 {job.id[:8]}… stage={job.stage}，未重复入队）"
+                        )
+                        if job.stage == "running":
+                            return _toast(
+                                "info",
+                                f"已有进行中的提审作业{reused_msg}，请稍候通知",
+                            )
+            except Exception:  # noqa: BLE001
+                logger.exception("enqueue_submit_job before toast failed")
+
             threading.Thread(
                 target=_job,
+                kwargs={"job_id": start_job_id},
                 name=f"card-submit-{app_id}",
                 daemon=True,
             ).start()
             if platforms == [Platform.IOS]:
                 mode = "真实写 ASC" if _truthy(value.get("execute")) else "dry-run 不写 ASC"
-                return _toast("info", f"已受理 iOS 上传/提审（{mode}），完成后私聊通知你")
+                return _toast(
+                    "info",
+                    f"已受理 iOS 上传/提审（{mode}）{reused_msg}，完成后私聊通知你",
+                )
             track_show = (value.get("track") or _DEFAULT_CARD_TRACK).strip() or _DEFAULT_CARD_TRACK
             return _toast(
                 "info",
-                f"已受理提审（轨道 {track_show}），完成后私聊通知你",
+                f"已受理提审（轨道 {track_show}）{reused_msg}，完成后私聊通知你",
             )
 
         if action_type == ACTION_STATUS:

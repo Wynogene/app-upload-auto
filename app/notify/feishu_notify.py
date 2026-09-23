@@ -143,24 +143,14 @@ class Notifier:
         )
 
     def notify_operation_results(self, app_id: str, results: list[OperationResult]) -> dict:
-        """传包 / 提审等操作结果：正式名单。"""
-        from app.core.watch_targets import console_hints_for
+        """传包 / 提审等操作结果：正式名单（成功短字段，不加长 Console HINT）。"""
+        from app.core.notify_copy import format_operation_results_ops
 
-        lines = []
-        for r in results:
-            mark = "✅" if r.ok else "❌"
-            plat = r.platform.value if r.platform else "-"
-            lines.append(f"{mark} **{plat}**: {r.message}")
-        if any(r.ok for r in results):
-            plats = [
-                r.platform.value for r in results if r.ok and r.platform is not None
-            ]
-            hint = console_hints_for(plats)
-            lines.append(f"\n_{hint}_")
+        markdown = format_operation_results_ops(results)
         return self._send_interactive_all(
             app_id=app_id,
             title=f"发版助手 · 操作结果 · {app_id}",
-            markdown="\n".join(lines) or "无结果",
+            markdown=markdown or "无结果",
             buttons=self._buttons(app_id),
             template="green" if all(r.ok for r in results) else "red",
             audience="ops",

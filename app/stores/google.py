@@ -68,6 +68,9 @@ def is_retryable_media_upload_error(exc: BaseException) -> bool:
             "503",
             "502",
             "429",
+            "edit has been deleted",
+            "no longer available",
+            "the edit is no longer active",
         )
     )
 
@@ -117,10 +120,10 @@ def execute_resumable_media_upload(
 
     total = max(int(total_size or 0), 0)
     total_note = _format_mib(total) if total else "?"
-    logger.info(
-        "google.{} upload start: {} MB (chunked resumable)",
-        label,
-        total_note,
+    from app.logging_setup import echo_upload_progress
+
+    echo_upload_progress(
+        f"[upload] google.{label} start: {total_note} MB (chunked resumable)"
     )
     response = None
     last_logged_bytes = -1
@@ -174,20 +177,15 @@ def execute_resumable_media_upload(
         last_logged_bytes = done
         if total > 0:
             pct = min(100.0, 100.0 * done / total)
-            logger.info(
-                "google.{} upload progress: {}/{} MB ({:.0f}%)",
-                label,
-                _format_mib(done),
-                total_note,
-                pct,
+            echo_upload_progress(
+                f"[upload] google.{label} progress: "
+                f"{_format_mib(done)}/{total_note} MB ({pct:.0f}%)"
             )
         else:
-            logger.info(
-                "google.{} upload progress: {} MB",
-                label,
-                _format_mib(done),
+            echo_upload_progress(
+                f"[upload] google.{label} progress: {_format_mib(done)} MB"
             )
-    logger.info("google.{} upload complete: {} MB", label, total_note)
+    echo_upload_progress(f"[upload] google.{label} complete: {total_note} MB")
     return response
 
 

@@ -4,8 +4,6 @@ from loguru import logger
 
 from app.config import get_app_by_id
 from app.core.watch_targets import (
-    ANDROID_HINT,
-    IOS_HINT,
     upsert_target,
     watch_hint_command,
 )
@@ -21,14 +19,14 @@ from app.stores import AppleStoreClient, GoogleStoreClient
 
 
 def _maybe_register_watch(result: OperationResult, req_track: str | None = None) -> str | None:
-    """提审/正式轨上传成功后登记盯盘，并返回 CLI 提示文案。
+    """提审/正式轨上传成功后登记盯盘，并返回**短**附言（飞书另有字段卡）。
 
     - Android：production 上传/提审成功（写 Play）
     - iOS：``execute=True`` 且提审成功（dry-run 不登记）
     """
     if not result.ok or not result.platform:
         return None
-    details = result.details or {}
+    details = dict(result.details or {})
     app_id = result.app_id or ""
 
     if result.platform == Platform.ANDROID:
@@ -47,16 +45,17 @@ def _maybe_register_watch(result: OperationResult, req_track: str | None = None)
             heartbeat_hours=0.0,
             note="auto after production submit",
         )
-        hint = watch_hint_command(app_id, vc, "android")
+        details["watch_registered"] = True
+        details["watch_version_code"] = vc
+        result.details = details
         logger.info("watch target registered app={} versionCode={}", app_id, vc)
+        # CLI 可看完整命令；飞书用 format_operation_results_ops 短展示
         return (
-            f"已登记盯盘目标 versionCode={vc}（同 App 更旧的正式轨 Android 盯盘会自动停掉）。"
-            f"建议立刻执行:\n  {hint}\n"
-            f"（{ANDROID_HINT}）"
+            f"已登记盯盘 versionCode={vc}（旧正式轨已停；serve 会扫）。"
+            f"临时加盯：{watch_hint_command(app_id, vc, 'android')}"
         )
 
     if result.platform == Platform.IOS:
-        # dry-run / 未真正写 ASC 不登记
         if details.get("dry_run") or not details.get("execute"):
             return None
         version = (
@@ -75,7 +74,10 @@ def _maybe_register_watch(result: OperationResult, req_track: str | None = None)
             heartbeat_hours=0.0,
             note=note,
         )
-        hint = watch_hint_command(app_id, None, "ios")
+        details["watch_registered"] = True
+        if version:
+            details["watch_version"] = str(version)
+        result.details = details
         logger.info(
             "watch target registered app={} platform=ios version={}",
             app_id,
@@ -83,9 +85,8 @@ def _maybe_register_watch(result: OperationResult, req_track: str | None = None)
         )
         ver_bit = f" version={version}" if version else ""
         return (
-            f"已登记 iOS 盯盘目标{ver_bit}（同 App 仅保留一条 iOS 盯盘，会覆盖旧登记）。"
-            f"常驻 serve 已开则无需再开 watch；临时加盯:\n  {hint}\n"
-            f"（{IOS_HINT}）"
+            f"已登记 iOS 盯盘{ver_bit}（serve 会扫）。"
+            f"临时加盯：{watch_hint_command(app_id, None, 'ios')}"
         )
 
     return None
@@ -161,7 +162,11 @@ class AppReleaseService:
                     + (f"（versionCode={version_code}）" if version_code else "")
                     + "。若要推进到其它轨道（含正式版），请用 release 命令。"
                 ),
-                details=upload_result.details,
+                details={
+                    **(upload_result.details or {}),
+                    "notify_skip": True,
+                    "synthetic_follow": True,
+                },
             )
             return [upload_result, follow]
 
@@ -177,7 +182,31 @@ class AppReleaseService:
             execute=req.execute,
             operator_open_id=req.operator_open_id,
         )
-        return [upload_result, self.submit(submit_req)]
+        submit_result = self.submit(submit_req)
+        # 仅文案：上传已成功但提审失败 → 勿再整包 upload（不改商店写路径）
+        if (
+            req.platform == Platform.IOS
+            and upload_result.ok
+            and not submit_result.ok
+            and details.get("build_id")
+        ):
+            ver = (
+                req.version_name
+                or details.get("version_name")
+                or details.get("cfBundleShortVersionString")
+                or "<version>"
+            )
+            bid = details.get("build_id")
+            tip = (
+                f"上传已成功 build_id={bid}。请勿再执行 upload / upload-submit 传同一 IPA；"
+                f"下一刀只用 release 提审：\n"
+                f"  python cli.py release --app-id {req.app_id} --platform ios "
+                f"--version-name {ver} --build-id {bid} --execute --no-notify"
+            )
+            submit_result.message = (
+                f"{submit_result.message}\n\n—— 下一刀（勿再 upload）——\n{tip}"
+            )
+        return [upload_result, submit_result]
 
     def status(self, req: StatusRequest) -> list[ReviewStatus]:
         app = self._app(req.app_id)

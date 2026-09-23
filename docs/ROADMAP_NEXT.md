@@ -48,12 +48,15 @@
 - Android 正式轨默认约 5% 分批；上传卡住可整包重试
 - serve 启动轮询不阻塞 `/health`；重启后可用 `check-serve-watch.ps1` 恢复
 - iOS `--execute` 提审成功后自动登记盯盘（对齐 Android 正式轨）
+- iOS 提审失败摘要（进度 + 建议命令；不自动跳步，成功路径不变）
+- iOS 上传失败摘要；upload-submit 上传成功但提审失败时提示「勿再 upload、改用 release」（仅文案）
+- 提审作业队列落盘 + serve 推进（半成功只 submit；零影响成功写路径）见 [SUBMIT_JOB_QUEUE.md](./SUBMIT_JOB_QUEUE.md)
 
 ## 下一步
 
 1. 与 `ai_support` 合并：按契约接发卡按钮 / 群晖（本仓已可独立用 `SYNOLOGY_*`）
 2. 运营化：稳定后再按 [OPS_PERSONAL_ONLY.md](./OPS_PERSONAL_ONLY.md) 评估是否关个人模式
-3. 可选：iOS 提审中途续跑指引、挂构建防覆盖等防呆
+3. 可选：挂构建防覆盖（默认关的 guard；**非刚需**，成功路径保持不动）
 4. 可选：盯盘卡片展示「开始放量」时间（iOS `startDate`）
 
 ## 明确不做

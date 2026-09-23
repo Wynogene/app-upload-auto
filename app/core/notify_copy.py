@@ -11,7 +11,7 @@ import re
 
 from app.config import get_app_by_id
 from app.core.notify_titles import parse_android_production_rollout
-from app.models import Platform, ReviewState, ReviewStatus
+from app.models import OperationResult, Platform, ReviewState, ReviewStatus
 from app.stores.apple_phased import parse_phased_fingerprint, phased_percent_for_day
 
 _HINT_START_RE = re.compile(
@@ -255,3 +255,110 @@ def format_review_status_ops(status: ReviewStatus) -> str:
 def format_review_statuses_ops(statuses: list[ReviewStatus]) -> str:
     blocks = [format_review_status_ops(s) for s in statuses]
     return "\n\n---\n\n".join(blocks)
+
+
+def _first_result_line(message: str | None) -> str:
+    """成功卡只用首句结果，去掉盯盘附言 / 续推 / 长 HINT / 默认文案括号。"""
+    if not message:
+        return ""
+    text = _strip_trailing_hint(message)
+    for sep in (
+        "\n已登记盯盘",
+        "\n已登记 iOS 盯盘",
+        "\n\n—— 下一刀",
+        "\n\n—— 失败摘要",
+        "\n确认稳定后可续推",
+        "\n全量则用",
+        "（版本说明使用默认文案",
+        "。已按 ",
+        "。建议立刻执行",
+    ):
+        if sep in text:
+            text = text.split(sep, 1)[0]
+    text = text.strip().rstrip("。").strip()
+    return f"{text}。" if text else ""
+
+
+def format_operation_result_ops(result: "OperationResult") -> str | None:
+    """单条操作结果 → 飞书短字段；``notify_skip`` 则返回 None。"""
+    details = result.details or {}
+    if details.get("notify_skip") or details.get("synthetic_follow"):
+        return None
+
+    app_id = result.app_id or "-"
+    plat = result.platform.value if result.platform else "-"
+
+    if not result.ok:
+        # 失败保留完整摘要（含失败指引）
+        body = (result.message or "").strip() or "失败"
+        return _block(
+            [
+                ("App", app_id),
+                ("平台", "iOS" if plat == "ios" else ("Android" if plat == "android" else plat)),
+                ("结果", "失败"),
+            ]
+        ) + f"\n\n{body}"
+
+    rows: list[tuple[str, str]] = [
+        ("App", app_id),
+    ]
+    if result.platform == Platform.IOS:
+        rows.append(("平台", "iOS"))
+        ver = (
+            details.get("version_name")
+            or details.get("version_string")
+            or details.get("cfBundleShortVersionString")
+        )
+        build_id = details.get("build_id")
+        ver_s = str(ver) if ver else ""
+        if build_id:
+            ver_s = f"{ver_s} · build `{build_id}`" if ver_s else f"build `{build_id}`"
+        if ver_s:
+            rows.append(("版本", ver_s))
+        state = details.get("submission_state") or (
+            result.review_state.value if result.review_state else ""
+        )
+        head = _first_result_line(result.message) or "成功"
+        if state and state not in head:
+            rows.append(("结果", f"{head.rstrip('。')}（{state}）"))
+        else:
+            rows.append(("结果", head))
+        if details.get("watch_registered"):
+            rows.append(("盯盘", "已登记（serve 会扫）"))
+        rows.append(("入口", _ios_entry(app_id)))
+    elif result.platform == Platform.ANDROID:
+        rows.append(("平台", "Android"))
+        vc = details.get("version_code")
+        track = details.get("track") or "—"
+        ver_s = f"{vc} @ {track}" if vc is not None else str(track)
+        rows.append(("版本", ver_s))
+        rollout = details.get("rollout")
+        frac = details.get("rollout_fraction")
+        if rollout:
+            rows.append(("放量", str(rollout)))
+        elif frac is not None:
+            try:
+                rows.append(("放量", f"约{float(frac) * 100:g}%"))
+            except (TypeError, ValueError):
+                pass
+        rows.append(("结果", _first_result_line(result.message) or "成功"))
+        if details.get("watch_registered"):
+            rows.append(("盯盘", "已登记（旧正式轨已停；serve 会扫）"))
+        rows.append(("入口", _android_entry(app_id)))
+    else:
+        rows.append(("平台", plat))
+        rows.append(("结果", _first_result_line(result.message) or "成功"))
+
+    return _block(rows)
+
+
+def format_operation_results_ops(results: list) -> str:
+    """飞书「操作结果」正文：成功短字段；跳过 synthetic follow；不加长 HINT footer。"""
+    blocks: list[str] = []
+    for r in results:
+        if not isinstance(r, OperationResult):
+            continue
+        block = format_operation_result_ops(r)
+        if block:
+            blocks.append(block)
+    return "\n\n---\n\n".join(blocks) if blocks else "无结果"

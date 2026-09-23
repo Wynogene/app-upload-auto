@@ -169,6 +169,7 @@ python cli.py release --app-id easelife --platform ios --version-name 5.1054.53 
 - 提审时会**自动开启分批**（`appStoreVersionPhasedReleases`，INACTIVE→过审后走 7 天曲线）
 - 提审前校验：ASC 全部已本地化语言的 what's New 非空；构建已声明出口合规
 - `--execute` 上传必须成功拉取 ASC 现状（版本/构建号比对），失败则硬拦
+- 提审中途失败时终端会附带**失败摘要**（已做到哪 + 建议命令）；**不自动跳步**
 - 发布方式 / 点「发布给用户」仍须人工；工具**永不代点**全量结束分批
 
 **版本说明默认值（已实现解析）：**

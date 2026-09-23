@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     status_poll_interval_minutes: int = 30
     # personal-only 默认关闭定时，避免无意刷屏；确认后再开
     schedule_enabled: bool = False
+    # 提审作业落盘自愈（飞书点提审入队；serve 可推进）。false=仅内存线程、不落盘
+    submit_jobs_enabled: bool = True
 
     apps_config_path: str = Field(default=str(CONFIG_DIR / "apps.yaml"))
     log_dir: str = Field(default=str(ROOT_DIR / "logs"))

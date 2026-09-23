@@ -542,6 +542,34 @@ def apps_cmd(status: bool, include_disabled: bool, json_out: bool) -> None:
         click.echo("详见 docs/ANDROID_APPS.md")
 
 
+@cli.command("submit-jobs")
+@click.option("--once", is_flag=True, default=False, help="推进一轮可运行作业后退出")
+@click.option("--list", "list_only", is_flag=True, default=False, help="只列出作业，不推进")
+@click.option("--limit", default=3, show_default=True, help="本轮最多处理条数")
+def submit_jobs_cmd(once: bool, list_only: bool, limit: int) -> None:
+    """提审作业队列（落盘自愈；不改商店成功写路径）。见 docs/SUBMIT_JOB_QUEUE.md。"""
+    from app.core import submit_jobs as sj
+
+    if list_only or not once:
+        jobs = sj.load_jobs()
+        if not jobs:
+            click.echo("(no submit jobs)")
+        for j in jobs:
+            click.echo(
+                f"{j.id[:8]}… {j.app_id}/{j.platform} stage={j.stage} "
+                f"attempts={j.attempts}/{j.max_attempts} "
+                f"build={j.build_id or '-'} err={(j.last_error or '')[:60]}"
+            )
+        if list_only:
+            return
+        if not once:
+            click.echo("提示: 加 --once 推进可运行作业；serve 也会定时推进。")
+            return
+
+    ids = sj.advance_submit_jobs(limit=limit)
+    click.echo(f"advanced: {ids or '(none)'}")
+
+
 @cli.command("apps-ready")
 @click.option("--app-id", "app_ids", multiple=True, help="只检查指定 app（可重复）；默认全部启用项")
 @click.option(

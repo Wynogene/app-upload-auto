@@ -402,6 +402,7 @@ class AppleStoreClient(StoreClient):
                 version_name=str(version_name),
                 build_number=str(build_number),
             )
+            plan.app_id = req.app_id
         except Exception as exc:  # noqa: BLE001
             return OperationResult(
                 ok=False,
@@ -555,6 +556,7 @@ class AppleStoreClient(StoreClient):
             build_id=build_id,
             whats_new_by_locale=text_by_locale,
             fallback_whats_new=fallback,
+            app_id=req.app_id,
         )
         plan.steps = build_review_plan_steps(plan)
         details = {

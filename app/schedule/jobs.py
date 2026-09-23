@@ -174,6 +174,20 @@ def poll_review_status_job() -> None:
             logger.exception("notify heartbeat failed")
 
 
+def advance_submit_jobs_job() -> None:
+    """推进落盘的提审作业（自愈）；不替代盯盘。"""
+    try:
+        from app.core.submit_jobs import advance_submit_jobs, submit_jobs_enabled
+
+        if not submit_jobs_enabled():
+            return
+        ids = advance_submit_jobs(limit=3)
+        if ids:
+            logger.info("advanced submit jobs: {}", ids)
+    except Exception:  # noqa: BLE001
+        logger.exception("advance_submit_jobs_job failed")
+
+
 def start_scheduler() -> BackgroundScheduler:
     global _scheduler
     if _scheduler:
@@ -192,9 +206,23 @@ def start_scheduler() -> BackgroundScheduler:
         replace_existing=True,
         max_instances=1,
     )
+    # 提审作业推进：间隔取 min(5, 盯盘间隔)，且至少 1 分钟
+    job_minutes = max(1, min(5, minutes))
+    scheduler.add_job(
+        advance_submit_jobs_job,
+        trigger="interval",
+        minutes=job_minutes,
+        id="advance_submit_jobs",
+        replace_existing=True,
+        max_instances=1,
+    )
     scheduler.start()
     _scheduler = scheduler
-    logger.info("scheduler started, poll every {} minutes", minutes)
+    logger.info(
+        "scheduler started, poll every {} minutes, submit-jobs every {} minutes",
+        minutes,
+        job_minutes,
+    )
     # 启动后立刻扫一轮（只读）。放到后台线程，避免 Android 代理卡住阻塞 uvicorn 起服/health
     import threading
 
@@ -203,6 +231,10 @@ def start_scheduler() -> BackgroundScheduler:
             poll_review_status_job()
         except Exception:  # noqa: BLE001
             logger.exception("initial poll_review_status_job failed")
+        try:
+            advance_submit_jobs_job()
+        except Exception:  # noqa: BLE001
+            logger.exception("initial advance_submit_jobs_job failed")
 
     threading.Thread(
         target=_initial_poll,

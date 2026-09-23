@@ -157,6 +157,7 @@ data/             # watch_targets.json（本地运行态，勿提交密钥）
 | [IOS_ASC_SETUP.md](docs/IOS_ASC_SETUP.md) | iOS 凭据与校验 |
 | [ROADMAP_NEXT.md](docs/ROADMAP_NEXT.md) | 后续扩展 |
 | [AI_SUPPORT_INTEGRATION_CONTRACT.md](docs/AI_SUPPORT_INTEGRATION_CONTRACT.md) | 日后并入 ai_support 的字段契约（**不改对方仓库**） |
+| [SUBMIT_JOB_QUEUE.md](docs/SUBMIT_JOB_QUEUE.md) | 提审作业落盘自愈（飞书/serve；零影响成功写路径） |
 | [SUBMIT_BUTTON_PLAN.md](docs/SUBMIT_BUTTON_PLAN.md) | 「提审」按钮接入方案（修订版） |
 
 安全调试 CLI：`submit-card`（仅私聊说明）/ `card-run --dry-resolve`（只选型）/ `card-run --track internal`（测轨上传）。详见 SAFE_RUNBOOK。  
@@ -166,5 +167,6 @@ data/             # watch_targets.json（本地运行态，勿提交密钥）
 
 1. 与 `ai_support` 合并窗口：按契约接发卡按钮 / 群晖下载（本仓库侧已可独立用 `SYNOLOGY_*`）  
 2. 运营化：稳定后再按 OPS 清单评估是否关个人模式、改发群（默认不做）  
-3. 可选：iOS 提审失败中途的续跑指引、挂构建防覆盖等防呆增强  
-4. 可选：盯盘卡片展示「开始放量」时间（iOS 有 `startDate`；Android API 弱）
+3. 作业队列增强：更细阶段、失败告警收敛（见 [SUBMIT_JOB_QUEUE.md](docs/SUBMIT_JOB_QUEUE.md)）  
+4. 可选：挂构建防覆盖（默认关；非刚需）  
+5. 可选：盯盘卡片展示「开始放量」时间（iOS 有 `startDate`；Android API 弱）
