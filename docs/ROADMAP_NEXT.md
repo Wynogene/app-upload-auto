@@ -1,60 +1,59 @@
-# 后续扩展清单（boykeep / iOS）
+# 后续扩展清单
 
-在 blurams / easelife Android 上传 + 盯盘可用之后，按材料到位再扩展。
+对照当前代码与真机验证进度（以 README 为准）。
 
 ## boykeep Android
 
 | 需要 | 状态 |
 |------|------|
-| 独立 Play Console + **独立 GCP 项目**（与 `sd-gcp-2026-7-15` 分离） | 待操作 |
-| 服务账号 JSON → `secrets/google-play-sa-boykeep.json` | 待提供 |
-| 确认 package `com.boykeep.ipc1` 与 SA 权限（测试轨 + 正式版） | 待提供 |
-| [`config/apps.yaml`](../config/apps.yaml) 已预留 `boykeep` 条目 | 已预留 |
+| 独立 Play Console + **独立 GCP 项目** | ✅ 已配（`boykeep-f3983`） |
+| 服务账号 JSON → `secrets/google-play-sa-boykeep.json` | ✅ 已配 |
+| package `com.boykeep.ipc1` + SA 权限 | ✅ 已在 `apps.yaml`；发版前用 `apps-ready` / 测轨复核 |
+| [`config/apps.yaml`](../config/apps.yaml) `boykeep` 条目 | ✅ 已启用 |
 
-**完整逐步方案（另一套登录账号）：** [BOYKEEP_ANDROID_SETUP.md](./BOYKEEP_ANDROID_SETUP.md)
-
-到位后：与 easelife 相同走 `upload` / `upload-submit` / `watch`，无需改核心逻辑（确认 SA 路径即可）。
+发版命令与 easelife 相同：`upload` / `upload-submit` / `watch`。逐步说明见 [BOYKEEP_ANDROID_SETUP.md](./BOYKEEP_ANDROID_SETUP.md)。
 
 ## iOS（App Store Connect）
 
 | 需要 | 状态 |
 |------|------|
-| Issuer ID | ✅ 已提供（个人 API 密钥，blurams/easelife 主体） |
-| Key ID + `.p8` → `secrets/ApiKey_ABCDE12345.p8` | ✅ 已提供 |
-| `.env`：`APPLE_KEY_ID` / `APPLE_ISSUER_ID` / `APPLE_PRIVATE_KEY_PATH` | ✅ 已填 |
-| 鉴权连通性（blurams / easelife） | ✅ 已打通（`cli.py apple-check`） |
-| 按 App 覆盖凭据（多主体支持） | ✅ 已支持（`apps.yaml` 的 `ios.key_id/issuer_id/private_key_path`） |
-| 状态查询 / 盯盘（真实状态映射） | ✅ 已可用（`cli.py status --platform ios`） |
-| 上传前校验（`ipa-check`） | ✅ 已可用 |
-| IPA 上传到 TestFlight（Build Upload API） | ✅ 已接入（默认 dry-run，`--execute` 才写） |
-| 提审（`reviewSubmissions` API） | ✅ 已接入（默认 dry-run，`--execute` 才写） |
-| boykeep（独立主体）的 `.p8` + Issuer ID | ✅ 已配置 |
+| Issuer ID / Key ID / `.p8`（blurams/easelife） | ✅ |
+| `.env` 全局 Apple 凭据 | ✅ |
+| 鉴权连通（`apple-check`） | ✅ |
+| 按 App 覆盖凭据（多主体） | ✅ |
+| 状态查询 / 盯盘 | ✅（`status` / `watch` / `serve`） |
+| 上传前校验（`ipa-check`） | ✅ |
+| Build Upload（Windows 直传） | ✅ 默认 dry-run；`--execute` 才写 |
+| 提审（`reviewSubmissions` + what's New + 出口合规） | ✅ 默认 dry-run；`--execute` 才写 |
+| 提审默认 7 天分批 | ✅ |
+| boykeep 独立主体 `.p8` | ✅ 已在 `apps.yaml` |
+| 真机验证 | ✅ blurams：更高版本 IPA 上传 + 提审已跑通 |
 
-**接入与自检说明：** [IOS_ASC_SETUP.md](./IOS_ASC_SETUP.md)
+**接入与自检：** [IOS_ASC_SETUP.md](./IOS_ASC_SETUP.md)  
+**上线前必读：** [IOS_RELEASE.md](./IOS_RELEASE.md)
 
-⚠️ 三个必须注意的点：
+⚠️ 注意：
 
-1. 现有账号用的是**个人 API 密钥**（`ApiKey_*.p8`），JWT 必须带 `sub="user"`，否则恒定 401。工具已自动处理。
-2. **API 密钥按 Apple 开发者团队隔离，`Issuer ID` 是团队级的。** 已确认 blurams + easelife 同属一个主体、
-   boykeep 是另一个主体（同一 Apple ID 下切换主体可见），因此 boykeep **必须单独申请一套**。
-3. 用 A 主体的密钥查 B 主体的 App 会返回 **404 而非 403**（App 对该密钥不可见），极易误判；
-   `apple-check --app-id <id>` 现在会显式提示。
+1. 个人 API 密钥（`ApiKey_*.p8`）JWT 须带 `sub="user"`；工具按文件名自动处理。
+2. 密钥按 Apple 团队隔离；blurams + easelife 同主体，boykeep 另一主体，须各自一套。
+3. 用错主体密钥查 App 常返回 **404**（不是 403）；`apple-check --app-id <id>` 会提示。
 
-计划顺序：先 TestFlight 上传 → 再 ASC 提审；复用同一套 `watch` / 飞书通知。本工具不代替人工在商店后台点「发布给用户」。
+本工具不代替人工在 ASC 点「发布给用户」。
 
-**上线前必读流程与坑点（含 vs Android）：** [IOS_RELEASE.md](./IOS_RELEASE.md)
+## 已完成（近期）
 
-## 已完成（本轮）
+- Build Upload + reviewSubmissions（`--execute` 闸门）
+- ASC JWT 长传自动刷新（约 20 分钟过期）
+- 群晖分享链下载（`SYNOLOGY_*`，不改 ai_support）
+- Android 正式轨默认约 5% 分批；上传卡住可整包重试
+- serve 启动轮询不阻塞 `/health`；重启后可用 `check-serve-watch.ps1` 恢复
 
-- **状态查询真实化**：`appStoreState`/`appVersionState` + build `processingState` → `ReviewState` 映射
-- **上传前校验**：`ipa-check` 拦截 bundle id 不符 / 版本号未递增 / 构建号重复，传包前就失败
-- **多主体凭据**：`apps.yaml` 的 `ios.key_id/issuer_id/private_key_path` 可按 App 覆盖，缺省回退 `.env`
+## 下一步
 
-## 下一步（等更高版本 IPA 做真实验证）
-
-1. ~~Build Upload / reviewSubmissions 逻辑~~：已写完；无 `--execute` 不写商店
-2. 用新 IPA：`ipa-check` → `upload-submit`（先无 `--execute`）→ 确认后再加 `--execute`
-3. **盯盘接入 iOS**：`watch` / `serve` 心跳通知（Apple 用版本号而非 versionCode）
+1. iOS 提审成功后**自动登记盯盘**（对齐 Android 正式轨）
+2. 与 `ai_support` 合并：按契约接发卡按钮 / 群晖（本仓已可独立用 `SYNOLOGY_*`）
+3. 运营化：稳定后再按 [OPS_PERSONAL_ONLY.md](./OPS_PERSONAL_ONLY.md) 评估是否关个人模式
+4. 可选：iOS 提审中途续跑指引、挂构建防覆盖等防呆
 
 ## 明确不做
 

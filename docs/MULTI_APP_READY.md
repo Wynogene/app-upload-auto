@@ -1,4 +1,4 @@
-# 多 App 常态化（真上传前）
+# 多 App 常态化
 
 **只读**：检查配置 / 密钥 / ASC 可见性 / 盯盘登记，**不写** Google Play / App Store。
 
@@ -10,7 +10,7 @@ cd f:\app-upload-auto
 # Android 需本地代理（如 7892）；iOS 默认直连
 python cli.py apps-ready
 # 只看某个 App
-python cli.py apps-ready --app-id blurams --app-id easelife
+python cli.py apps-ready --app-id blurams --app-id easelife --app-id boykeep
 ```
 
 退出码：有 FAIL 项则为 `1`。
@@ -19,34 +19,30 @@ python cli.py apps-ready --app-id blurams --app-id easelife
 
 | App | Play | Apple | 备注 |
 |-----|------|-------|------|
-| blurams | 共用 SA `google-play-sa-blurams-easelife.json` | `.env` 全局 | 与 easelife 同团队 |
-| easelife | 同上 | `.env` 全局 | 盯盘已跑 |
-| boykeep | 独立 SA `google-play-sa-boykeep.json` | **需独立 .p8** | 用 blurams 密钥查会 404 |
+| blurams | 共用 SA `google-play-sa-blurams-easelife.json` | `.env` 全局 | 与 easelife 同团队；iOS/Android 正式轨已真机验证 |
+| easelife | 同上 | `.env` 全局 | 盯盘可用 |
+| boykeep | 独立 SA `google-play-sa-boykeep.json` | `apps.yaml` 覆盖独立 `.p8` | 用 blurams 密钥查会 404 |
 | 安欣看 | 禁用 | 禁用 | 不投入 |
 
-## boykeep iOS 缺口（人工）
+## boykeep iOS（已配置，发版前复核）
 
-1. ASC 左上角切到 **boykeep** 主体  
-2. 用户与访问 → 密钥 → 生成 API 密钥，下载 `.p8` 放到 `secrets/`  
-3. 在 `config/apps.yaml` 的 boykeep.ios 填写：
+凭据已在 `config/apps.yaml` 的 `boykeep.ios`（`key_id` / `issuer_id` / `private_key_path` / `app_store_app_id`）。
 
-```yaml
-key_id: "……"
-issuer_id: "……"
-private_key_path: secrets/AuthKey_xxxx.p8   # 或 ApiKey_xxxx.p8
-app_store_app_id: "在 boykeep 主体下核对的数字 ID"
+发版或换钥前再确认：
+
+```powershell
+python cli.py apple-check --app-id boykeep
+python cli.py apps-ready --app-id boykeep
 ```
 
-4. 再跑：`python cli.py apple-check --app-id boykeep` / `python cli.py apps-ready --app-id boykeep`
-
-详见 [IOS_ASC_SETUP.md](./IOS_ASC_SETUP.md)。
+若换密钥：在 ASC 切到 **boykeep** 主体 → 用户与访问 → 密钥 → 下载 `.p8` 到 `secrets/` → 更新 `apps.yaml` 三行。详见 [IOS_ASC_SETUP.md](./IOS_ASC_SETUP.md)。
 
 ## 登记盯盘（只读轮询）
 
 ```powershell
-# iOS（无需 version-code）
+# iOS（无需 version-code）；提审后建议手动登记（尚未自动写 watch_targets）
 python cli.py watch --app-id blurams --platform ios --once --heartbeat-hours 0 --no-notify
-# Android（需线上 versionCode）
+# Android（需线上 versionCode）；正式轨 upload-submit 成功后一般会自动登记
 python cli.py watch --app-id blurams --platform android --version-code <码> --once --heartbeat-hours 0 --no-notify
 ```
 
@@ -54,7 +50,7 @@ python cli.py watch --app-id blurams --platform android --version-code <码> --o
 
 ## IPA
 
-`F:\upload-test` 无 IPA 时跳过 `ipa-check`；有包后再：
+有包后：
 
 ```powershell
 python cli.py ipa-check --app-id blurams --ipa "F:\upload-test\xxx.ipa"

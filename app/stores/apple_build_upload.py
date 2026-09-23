@@ -127,8 +127,18 @@ def execute_build_upload(
     poll_seconds: float = 15.0,
     poll_timeout_seconds: float = 45 * 60,
     put_timeout_seconds: float = 600.0,
+    headers_provider: Any | None = None,
 ) -> BuildUploadResult:
-    """真实写入 ASC：创建上传会话 → 分片 PUT → 标记完成 → 等到 Build VALID。"""
+    """真实写入 ASC：创建上传会话 → 分片 PUT → 标记完成 → 等到 Build VALID。
+
+    ``headers_provider``：可选 ``() -> dict``，长传/轮询时刷新 JWT（ASC token ~20 分钟过期）。
+    """
+
+    def _hdrs() -> dict[str, str]:
+        if headers_provider is not None:
+            return headers_provider()
+        return headers
+
     details: dict[str, Any] = {
         "file_name": plan.file_name,
         "file_size": plan.file_size,
@@ -152,7 +162,9 @@ def execute_build_upload(
             },
         }
     }
-    resp = client.post(f"{ASC_BASE}/v1/buildUploads", headers=headers, json=create_body)
+    resp = client.post(
+        f"{ASC_BASE}/v1/buildUploads", headers=_hdrs(), json=create_body
+    )
     if resp.status_code >= 400:
         return BuildUploadResult(
             ok=False,
@@ -186,7 +198,7 @@ def execute_build_upload(
         }
     }
     resp = client.post(
-        f"{ASC_BASE}/v1/buildUploadFiles", headers=headers, json=file_body
+        f"{ASC_BASE}/v1/buildUploadFiles", headers=_hdrs(), json=file_body
     )
     if resp.status_code >= 400:
         return BuildUploadResult(
@@ -291,7 +303,7 @@ def execute_build_upload(
     }
     resp = client.patch(
         f"{ASC_BASE}/v1/buildUploadFiles/{file_id}",
-        headers=headers,
+        headers=_hdrs(),
         json=patch_body,
     )
     if resp.status_code >= 400:
@@ -303,7 +315,7 @@ def execute_build_upload(
         patch_body["data"]["attributes"] = {"uploaded": True}
         resp = client.patch(
             f"{ASC_BASE}/v1/buildUploadFiles/{file_id}",
-            headers=headers,
+            headers=_hdrs(),
             json=patch_body,
         )
         if resp.status_code >= 400:
@@ -324,7 +336,7 @@ def execute_build_upload(
     while time.time() < deadline:
         resp = client.get(
             f"{ASC_BASE}/v1/buildUploads/{upload_id}",
-            headers=headers,
+            headers=_hdrs(),
         )
         if resp.status_code >= 400:
             return BuildUploadResult(
@@ -369,7 +381,8 @@ def execute_build_upload(
     # 轮询出现对应 build 且 VALID
     build_id, proc = _wait_build_valid(
         client=client,
-        headers=headers,
+        headers=_hdrs(),
+        headers_provider=headers_provider,
         app_store_app_id=plan.app_store_app_id,
         cf_bundle_version=plan.cf_bundle_version,
         poll_seconds=poll_seconds,
@@ -423,13 +436,19 @@ def _wait_build_valid(
     cf_bundle_version: str,
     poll_seconds: float,
     deadline: float,
+    headers_provider: Any | None = None,
 ) -> tuple[str | None, str | None]:
+    def _hdrs() -> dict[str, str]:
+        if headers_provider is not None:
+            return headers_provider()
+        return headers
+
     last_proc: str | None = None
     last_id: str | None = None
     while time.time() < deadline:
         resp = client.get(
             f"{ASC_BASE}/v1/builds",
-            headers=headers,
+            headers=_hdrs(),
             params={
                 "filter[app]": app_store_app_id,
                 "filter[version]": cf_bundle_version,

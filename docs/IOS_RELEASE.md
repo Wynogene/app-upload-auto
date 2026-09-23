@@ -3,14 +3,14 @@
 > 目的：在**真实传 IPA / 真提审之前**把整条链路和坑点说清楚。  
 > 对照 Android：以前「没传 `--rollout` → 过审后可能直接全量」那种坑，**不能**再拖到快碰到用户才发现。
 
-本工具现状（截至文档编写）：
+本工具现状（blurams 已真机验证上传 + 提审；仍默认 dry-run）：
 
 | 步骤 | 本工具 | 人工 ASC |
 |------|--------|----------|
 | 上传前校验 `ipa-check` | ✅ | — |
-| IPA 上传到 TestFlight | ✅ 默认 dry-run；`--execute` 才写 ASC | Transporter / Xcode 仍可用 |
-| 提审 `reviewSubmissions` | ✅ 默认 dry-run；`--execute` 才写 ASC | ASC 网页可提审 |
-| 状态 / 分批盯盘 | ✅ 只读 | — |
+| IPA 上传到 TestFlight | ✅ 默认 dry-run；`--execute` 才写 ASC；长传自动刷新 JWT | Transporter / Xcode 仍可用 |
+| 提审 `reviewSubmissions` | ✅ 默认 dry-run；`--execute`；默认开 7 天分批 | ASC 网页可提审 |
+| 状态 / 分批盯盘 | ✅ 只读；提审后建议手动 `watch`（尚未自动登记） | — |
 | 点「发布给用户 / 全量 / 暂停分批」 | ❌ **永不代点** | 需运营在 ASC 操作 |
 
 ---

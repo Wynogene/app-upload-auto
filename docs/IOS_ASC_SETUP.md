@@ -254,8 +254,10 @@ IPA: bundle=com.vitec.easelifeEn version=5.1054.52 build=5.1054.52.1
 | 状态查询 / 盯盘（真实状态映射） | ✅ 已可用 |
 | 上传前校验（`ipa-check`） | ✅ 已可用 |
 | IPA 上传到 TestFlight（Build Upload API） | ✅ 已接入；**默认 dry-run**，加 `--execute` 才写 ASC |
-| 提审（`reviewSubmissions` API） | ✅ 已接入；**默认 dry-run**，加 `--execute` 才写 ASC |
-| boykeep（主体 B）凭据 | ✅ 已配置（有包后用 `--execute` 验证） |
+| 提审（`reviewSubmissions` + what's New + 出口合规） | ✅ 已接入；**默认 dry-run**，加 `--execute` 才写 ASC |
+| JWT 长传自动刷新 | ✅（约 20 分钟过期；上传轮询中会换新头） |
+| boykeep（主体 B）凭据 | ✅ 已配置 |
+| 真机验证 | ✅ blurams 更高版本 IPA：上传 + 提审已跑通 |
 
 **安全默认：** 不加 `--execute` 时只做预检 / 上传计划 / 提审计划，**不会**创建 buildUploads、
 不会分片 PUT、不会 reviewSubmissions。飞书卡片同理，需 `value.execute=true` 或
@@ -264,21 +266,22 @@ IPA: bundle=com.vitec.easelifeEn version=5.1054.52 build=5.1054.52.1
 **版本说明：** iOS 提审时 `what's New` 默认语言与文案复用该 App 的
 `android.release_notes_locales` / `android.release_notes_default`（及 `.env` 全局）；
 仅当需要与 Play 不一致时，才在 `ios` 下单独配置同名项。可用
-`--whats-new` 覆盖。
+`--whats-new` 覆盖。提审默认开启 **7 天分批**。
 
 关于 IPA 上传：已实测 `POST /v1/buildUploads` 允许 `CREATE`
 （Apple 返回 *Allowed operations are: CREATE, DELETE, GET_INSTANCE*），
 意味着**不需要 Mac / altool**，Windows 上可直接走 API 上传。
 
-有更高版本 IPA 后验证示例：
+常用命令：
 
-```bash
+```powershell
 # 只读校验
-python cli.py ipa-check --app-id boykeep --ipa "F:\upload-test\xxx.ipa"
+python cli.py ipa-check --app-id blurams --ipa "F:\upload-test\xxx.ipa"
 
 # dry-run（不写商店）
-python cli.py upload-submit --app-id boykeep --platform ios --artifact "F:\upload-test\xxx.ipa" --no-notify
+python cli.py upload-submit --app-id blurams --platform ios --artifact "F:\upload-test\xxx.ipa" --no-notify
 
-# 真正上传+提审（显式确认）
-python cli.py upload-submit --app-id boykeep --platform ios --artifact "F:\upload-test\xxx.ipa" --execute --no-notify
+# 真正上传+提审（显式确认）；提审后建议手动 watch
+python cli.py upload-submit --app-id blurams --platform ios --artifact "F:\upload-test\xxx.ipa" --execute --notify
+python cli.py watch --app-id blurams --platform ios --once --heartbeat-hours 0 --notify
 ```

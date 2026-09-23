@@ -442,6 +442,7 @@ class AppleStoreClient(StoreClient):
             result = execute_build_upload(
                 client=client,
                 headers=self._headers(app_cfg),
+                headers_provider=lambda: self._headers(app_cfg),
                 plan=plan,
             )
         base_details.update(result.details)

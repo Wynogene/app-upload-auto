@@ -64,14 +64,24 @@ powershell -File F:\app-upload-auto\scripts\windows\uninstall-autostart.ps1
 
 中断后**不影响**商店线上版本，只是本机不再轮询 / 发飞书。
 
+### 开机 / 重启后
+
+若 `/health` 不通或端口占用异常：
+
+```powershell
+powershell -File .\scripts\windows\check-serve-watch.ps1
+# 仍不通再：
+powershell -File .\scripts\windows\start-serve-watch.ps1
+```
+
 ## 行为
 
-- 优先扫描 `data/watch_targets.json` 里**已登记**的盯盘目标（正式版提审成功或 `watch` 会写入）。
+- 优先扫描 `data/watch_targets.json` 里**已登记**的盯盘目标（Android 正式轨提审成功或手动 `watch` 会写入；**iOS 提审后目前需手动登记**）。
 - 指纹变化 → 飞书通知（专用标题优先）：过审/待你发布、被拒、Android 放量变更、iOS 分批进度、iOS 合规/合同卡住、构建失效或长时间 PROCESSING。
 - **政策状态页**（Play「政策状态」）API 读不到，需人工看 Console + 邮件；工具只在 footer 提示。
 - 默认 **不发心跳**（`heartbeat_hours=0`）；仅状态/放量变化时通知。若要心跳：`--heartbeat-hours 12`。
 - `heartbeat_hours > 0` 时才发「审核盯盘心跳提醒」。
-- 启动 serve 后会**立刻扫一轮**，之后按 `interval_minutes` 循环。
+- 启动 serve 后会**立刻扫一轮**（后台，不阻塞 `/health`），之后按 `interval_minutes` 循环。
 - Footer 按平台区分 Android / iOS 控制台提示（见 `ANDROID_HINT` / `IOS_HINT`）。
 - 全程**只读**，不写商店、不代点发布/改放量。
 
@@ -80,8 +90,8 @@ powershell -File F:\app-upload-auto\scripts\windows\uninstall-autostart.ps1
 ## 本机临时盯盘（不必开 serve）
 
 ```powershell
-python cli.py watch --app-id easelife --platform android --version-code 10428 --interval 30 --heartbeat-hours 0 --notify
-python cli.py watch --app-id easelife --platform ios --interval 30 --heartbeat-hours 0 --notify
+python cli.py watch --app-id blurams --platform android --version-code 1959 --once --heartbeat-hours 0 --notify
+python cli.py watch --app-id blurams --platform ios --once --heartbeat-hours 0 --notify
 ```
 
 详见 [AFTER_SUBMIT_WATCH.md](./AFTER_SUBMIT_WATCH.md)。

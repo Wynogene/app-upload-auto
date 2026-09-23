@@ -82,9 +82,8 @@ apps:
     ios:
       enabled: true
       bundle_id: com.boykeep.ipc1
-      # 已确认 boykeep 属于「另一个 Apple 开发者团队」（与 blurams/easelife 不同主体）。
-      # 用 blurams 团队密钥查会 404。请在 boykeep 主体下生成 .p8，并填写下面三行
-      # （步骤见 docs/MULTI_APP_READY.md / docs/IOS_ASC_SETUP.md）。
+      # boykeep 为另一 Apple 团队（与 blurams/easelife 不同主体）；用错钥查会 404。
+      # 下列凭据已配置；换钥步骤见 docs/MULTI_APP_READY.md / docs/IOS_ASC_SETUP.md。
       app_store_app_id: "6472993326"
       key_id: "DL58V4XRPT"
       issuer_id: "c8dd5e9c-5731-4867-8751-e11f55d7f393"
