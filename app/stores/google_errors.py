@@ -32,12 +32,21 @@ def describe_transport_error(exc: BaseException) -> str | None:
 
     if "ssl" in lower or "ssleof" in lower or "eof occurred in violation" in lower:
         return (
-            "网络/代理 SSL 中断（常见于大包经本地代理）。"
-            "请检查 HTTP(S)_PROXY 是否稳定后重试；与版本号或权限无关。"
+            "网络 SSL 中断（直连 ASC/Play 时也可能因跨境链路抖动发生；"
+            "与「必须开代理」无关）。稍后重试即可；持续失败再查本机网络。"
         )
 
-    if "max retries exceeded" in lower or "timed out" in lower or "timeout" in lower:
-        return "连接 Google Play API 失败（超时或代理不可用）。请确认代理与网络后重试。"
+    if (
+        "10060" in text
+        or "timed out" in lower
+        or "timeout" in lower
+        or "max retries exceeded" in lower
+    ):
+        return (
+            "连接商店 API 超时（WinError 10060 / timeout）。"
+            "iOS 默认直连 ASC，偶发跨境超时属网络抖动，稍后重试；"
+            "Android 查 Play 仍依赖稳定代理。"
+        )
 
     return None
 
@@ -85,6 +94,9 @@ def is_transient_status_failure(
 
     关闭/开启本机代理导致 Play 查不通时，message 会变成这类文案；若照常推送，
     会出现「比例没变却收到私聊」的误报。
+
+    iOS 默认直连 ASC，仍可能因跨境链路超时 / SSL 抖动失败（与「必须开代理」无关）；
+    这类 ``status 异常: WinError 10060`` / SSL EOF 同样应按瞬时失败处理。
     """
     del state  # 仅作扩展点；真实 UNKNOWN 与瞬时失败靠 message 区分
     msg = (message or "").strip()
@@ -96,11 +108,35 @@ def is_transient_status_failure(
         "连接 Google Play API 失败",
         "状态查询失败:",
         "盯盘查询失败:",
+        "status 异常:",
+        "查询失败:",
+        "ASC 查询瞬时失败",
     )
     if any(m in msg for m in markers):
         return True
     lower = msg.lower()
-    return any(h in lower for h in _PROXY_REFUSED_HINTS)
+    if any(h in lower for h in _PROXY_REFUSED_HINTS):
+        return True
+    # 裸异常串（Apple status 尚未包装时）
+    needles = (
+        "10060",
+        "10061",
+        "timed out",
+        "timeout",
+        "temporarily unavailable",
+        "connection reset",
+        "connection aborted",
+        "connection refused",
+        "name or service not known",
+        "getaddrinfo failed",
+        "eof occurred in violation",
+        "ssleof",
+        "ssl:",
+        "remote end closed",
+        "broken pipe",
+        "network is unreachable",
+    )
+    return any(n in lower for n in needles)
 
 
 def _short(text: str, limit: int = 280) -> str:

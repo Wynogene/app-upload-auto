@@ -74,3 +74,38 @@ def test_synthesize_android_for_titles() -> None:
     synth = synthesize_message_from_ops_fp(fp)
     assert "rollout=0.2" in synth
     assert "inprogress" in synth.lower() or "inProgress" in synth
+
+
+def test_terminal_full_release_android_completed() -> None:
+    from app.core.watch_fingerprint import is_terminal_full_release_fp
+
+    fp = ops_watch_fingerprint(
+        _android("production: x codes=[1] status=completed ← target")
+    )
+    assert fp == "ops_v1|released|android|completed|-"
+    assert is_terminal_full_release_fp(fp)
+    # 分批中非终态
+    mid = ops_watch_fingerprint(
+        _android("production: x codes=[1] status=inProgress rollout=0.05 ← target")
+    )
+    assert not is_terminal_full_release_fp(mid)
+
+
+def test_terminal_full_release_ios_complete() -> None:
+    from app.core.watch_fingerprint import is_terminal_full_release_fp
+
+    fp = ops_watch_fingerprint(
+        _ios("5.1：已上线；分批：COMPLETE（分批已结束（全量））")
+    )
+    assert "COMPLETE" in fp
+    assert is_terminal_full_release_fp(fp)
+    mid = ops_watch_fingerprint(_ios("分批：ACTIVE 第4天≈10%"))
+    assert not is_terminal_full_release_fp(mid)
+
+
+def test_terminal_rejects_legacy_fingerprint() -> None:
+    from app.core.watch_fingerprint import is_terminal_full_release_fp
+
+    assert not is_terminal_full_release_fp(
+        "released|production: completed 很长旧指纹"
+    )

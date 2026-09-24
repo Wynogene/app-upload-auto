@@ -79,12 +79,12 @@ def _ios_entry(app_id: str) -> str:
 def _android_rollout_text(frac: float | None, *, halted: bool = False) -> str:
     if frac is None:
         return "-"
+    if frac >= 1:
+        return "全量100%"
     pct = f"{frac * 100:g}%"
     if halted:
         return f"约{pct}（已停发；是否恢复请到 Play Console）"
-    if frac < 1:
-        return f"约{pct}（调整放量请到 Play Console）"
-    return "100%"
+    return f"约{pct}（调整放量请到 Play Console）"
 
 
 def _ios_rollout_text(
@@ -137,17 +137,23 @@ def _android_fields(status: ReviewStatus) -> list[tuple[str, str]]:
         action = "请到 Play Console 查看原因"
     elif key == "PUBLISHED":
         if frac is not None and frac < 1:
-            state = "已上架（分批）"
+            state = "分批放量进行中"
             rollout = _android_rollout_text(frac)
         else:
-            state = "已上架（已全量）"
-            rollout = "100%"
+            state = "已全量开放"
+            rollout = "全量100%"
     elif track_status == "halted":
         state = "分批已停发"
         rollout = _android_rollout_text(frac, halted=True)
-    elif frac is not None and frac < 1:
-        state = "已上架（分批）"
+    elif track_status == "completed":
+        state = "已全量开放"
+        rollout = "全量100%"
+    elif track_status == "inprogress" or (frac is not None and frac < 1):
+        state = "分批放量进行中"
         rollout = _android_rollout_text(frac)
+    elif frac is not None and frac >= 1:
+        state = "已全量开放"
+        rollout = "全量100%"
     else:
         raw = status.state.value if status.state else ""
         state = {
@@ -220,14 +226,21 @@ def _ios_fields(status: ReviewStatus) -> list[tuple[str, str]]:
         state = "已过审，待手动发布"
         action = "请到 ASC 点发布"
     elif phased_state == "ACTIVE":
-        state = "已上线（分批中）"
+        state = "分批放量进行中"
         rollout = _ios_rollout_text(day, pct)
     elif phased_state == "PAUSED":
         state = "分批已暂停"
         rollout = _ios_rollout_text(day, pct, paused=True)
     elif phased_state == "COMPLETE":
-        state = "已上线（分批已结束）"
+        state = "已全量开放"
         rollout = _ios_rollout_text(day, pct, complete=True)
+    elif phased_state == "INACTIVE" and status.state == ReviewState.RELEASED:
+        state = "已上线（分批未开始）"
+        rollout = "未开始"
+    elif status.state == ReviewState.RELEASED:
+        # 避免只显示「已上线」与全量卡撞车
+        state = label if label and label != "已上线" else "已上线（分批细节未解析）"
+        rollout = "未解析"
     elif status.state == ReviewState.REJECTED:
         state = "审核未通过"
         action = "请到 ASC 查看拒信"

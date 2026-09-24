@@ -758,12 +758,26 @@ class AppleStoreClient(StoreClient):
                 )
         except Exception as exc:  # noqa: BLE001
             logger.exception("apple.status error")
+            from app.stores.google_errors import (
+                describe_transport_error,
+                is_transient_status_failure,
+            )
+
+            friendly = describe_transport_error(exc)
+            if friendly:
+                # 复用运输层文案；盯盘侧靠 is_transient 抑制推送
+                msg = f"ASC 查询瞬时失败: {friendly}"
+            else:
+                msg = f"status 异常: {exc}"
+            # 兜底：未命中 describe 的超时/SSL 也标成瞬时，便于指纹逻辑识别
+            if not is_transient_status_failure(message=msg):
+                msg = f"ASC 查询瞬时失败: {exc}"
             return ReviewStatus(
                 app_id=app_id,
                 platform=Platform.IOS,
                 version_name=version_name,
                 state=ReviewState.UNKNOWN,
-                message=f"status 异常: {exc}",
+                message=msg,
             )
 
     def _fetch_version_build(

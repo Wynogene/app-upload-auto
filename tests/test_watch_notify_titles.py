@@ -35,7 +35,7 @@ def test_android_rollout_notify_title_fraction_and_halt() -> None:
     new = "production: x codes=[1] status=inProgress rollout=0.2 ← target"
     title = android_rollout_notify_title(prev, new)
     assert title is not None
-    assert "放量" in title
+    assert "放量" in title or "分批" in title
     assert "5%" in title
     assert "20%" in title
 
@@ -45,6 +45,13 @@ def test_android_rollout_notify_title_fraction_and_halt() -> None:
     )
     assert halted is not None
     assert "停发" in halted
+
+    done = android_rollout_notify_title(
+        prev,
+        "production: x codes=[1] status=completed ← target",
+    )
+    assert done is not None
+    assert "全量" in done
 
 
 def test_publish_action_ios_and_android() -> None:

@@ -89,13 +89,14 @@ def test_ios_phased_notify_titles() -> None:
     prev = "5.1：已上线；分批：ACTIVE 第1天≈1%（分批进行中）"
     new = "5.1：已上线；分批：ACTIVE 第2天≈2%（分批进行中）"
     assert "第2天" in (ios_phased_notify_title(prev, new) or "")
+    assert "尚未全量" in (ios_phased_notify_title(prev, new) or "")
 
     assert "暂停" in (
         ios_phased_notify_title(prev, "5.1：已上线；分批：PAUSED 第1天≈1%（分批已暂停）") or ""
     )
-    assert "全量" in (
-        ios_phased_notify_title(prev, "5.1：已上线；分批：COMPLETE（分批已结束（全量））") or ""
-    )
+    done = ios_phased_notify_title(prev, "5.1：已上线；分批：COMPLETE（分批已结束（全量））") or ""
+    assert "全量" in done
+    assert "分批结束" in done
 
 
 def test_review_change_title_prefers_approval_then_phased() -> None:
@@ -116,6 +117,36 @@ def test_review_change_title_prefers_approval_then_phased() -> None:
         current_message="5.1：已上线；分批：ACTIVE 第3天≈5%（分批进行中）",
     )
     assert "第3天" in t2
+    assert "尚未全量" in t2
+
+
+def test_ios_dual_push_titles_are_distinct() -> None:
+    from app.core.notify_titles import review_change_notify_title
+
+    online = review_change_notify_title(
+        ReviewState.WAITING_FOR_REVIEW,
+        ReviewState.RELEASED,
+        previous_message="5.1054.52：等待审核",
+        current_message=(
+            "5.1054.52：已上线；构建 5.1054.52.1：可用；"
+            "分批：ACTIVE 第1天≈1%（分批进行中）"
+        ),
+    )
+    done = review_change_notify_title(
+        ReviewState.RELEASED,
+        ReviewState.RELEASED,
+        previous_message=(
+            "5.1054.52：已上线；构建 5.1054.52.1：可用；"
+            "分批：ACTIVE 第7天≈100%（分批进行中）"
+        ),
+        current_message=(
+            "5.1054.52：已上线；构建 5.1054.52.1：可用；"
+            "分批：COMPLETE（分批已结束（全量））"
+        ),
+    )
+    assert "分批放量进行中" in online or "尚未全量" in online
+    assert "全量" in done
+    assert online != done
 
 
 # ---------------- 状态映射 ----------------

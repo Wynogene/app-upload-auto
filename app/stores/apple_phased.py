@@ -109,20 +109,20 @@ def ios_phased_notify_title(
         return None
 
     if new_state == "PAUSED" and prev_state != "PAUSED":
-        return "iOS 分批发布已暂停"
+        return "iOS 分批已暂停 · 放量冻结（未全量）"
     if new_state == "COMPLETE" and prev_state != "COMPLETE":
-        return "iOS 分批发布已结束（已全量）"
+        return "iOS 分批结束 · 已全量 100%"
     if new_state == "ACTIVE":
         if prev_state in {None, "INACTIVE"} and new_day is not None:
             pct = phased_percent_for_day(new_day)
-            pct_note = f"，约{pct}%" if pct is not None else ""
-            return f"iOS 已开始分批发布（第{new_day}天{pct_note}）"
+            pct_note = f"≈{pct}%" if pct is not None else ""
+            return f"iOS 分批进行中 · 第{new_day}天{pct_note}（尚未全量）"
         if prev_day is not None and new_day is not None and new_day != prev_day:
             pct = phased_percent_for_day(new_day)
-            pct_note = f"，约{pct}%" if pct is not None else ""
-            return f"iOS 分批进度更新（第{new_day}天{pct_note}）"
+            pct_note = f"≈{pct}%" if pct is not None else ""
+            return f"iOS 分批进度 · 第{new_day}天{pct_note}（尚未全量）"
         if prev_state == "PAUSED":
-            return "iOS 分批发布已恢复"
+            return "iOS 分批已恢复 · 继续按日抬升（尚未全量）"
     return None
 
 

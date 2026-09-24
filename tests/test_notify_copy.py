@@ -54,11 +54,71 @@ def test_ios_phased_ops_copy_uses_build_number() -> None:
     assert "商店版本" not in text
     assert "第1天≈1%" in text or "第1天≈1" in text
     assert "不可自定义" in text or "按天自动抬升" in text
+    assert "分批放量进行中" in text
+    assert "本次" not in text
     assert "无需操作" not in text
     assert "动作" not in text
     assert "appstoreconnect.apple.com/apps/1588050679" in text
     ver_line = next(x for x in text.splitlines() if x.startswith("版本"))
     assert "5.1054.52.1" in ver_line
+
+
+def test_ios_complete_ops_copy_distinct_from_active() -> None:
+    active = ReviewStatus(
+        app_id="easelife",
+        platform=Platform.IOS,
+        version_name="5.1054.52",
+        state=ReviewState.RELEASED,
+        raw={"build": {"version": "5.1054.52.1"}},
+        message="5.1054.52：已上线；构建 5.1054.52.1：可用；分批：ACTIVE 第1天≈1%",
+    )
+    done = ReviewStatus(
+        app_id="easelife",
+        platform=Platform.IOS,
+        version_name="5.1054.52",
+        state=ReviewState.RELEASED,
+        raw={"build": {"version": "5.1054.52.1"}},
+        message="5.1054.52：已上线；构建 5.1054.52.1：可用；分批：COMPLETE（分批已结束（全量））",
+    )
+    a = format_review_status_ops(active)
+    b = format_review_status_ops(done)
+    assert "分批放量进行中" in a
+    assert "已全量开放" in b
+    assert "全量100%" in b
+    assert "本次" not in a and "本次" not in b
+    assert a != b
+
+
+def test_android_phased_and_full_ops_copy_aligned() -> None:
+    phased = ReviewStatus(
+        app_id="easelife",
+        platform=Platform.ANDROID,
+        version_name="10428",
+        state=ReviewState.RELEASED,
+        message=(
+            "lifecycle[production]: PUBLISHED (已上架) codes=[10428] "
+            "name=10428 (5.1054.4.428)\n"
+            "production: 10428 (5.1054.4.428) codes=[10428] status=inProgress "
+            "rollout=0.05 ← target"
+        ),
+    )
+    full = ReviewStatus(
+        app_id="easelife",
+        platform=Platform.ANDROID,
+        version_name="10428",
+        state=ReviewState.RELEASED,
+        message=(
+            "lifecycle[production]: PUBLISHED (已上架) codes=[10428] "
+            "name=10428 (5.1054.4.428)\n"
+            "production: 10428 (5.1054.4.428) codes=[10428] status=completed ← target"
+        ),
+    )
+    a = format_review_status_ops(phased)
+    b = format_review_status_ops(full)
+    assert "分批放量进行中" in a
+    assert "约5%" in a
+    assert "已全量开放" in b
+    assert "全量100%" in b
 
 
 def test_android_needs_publish_has_action() -> None:

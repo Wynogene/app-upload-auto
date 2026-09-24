@@ -9,6 +9,7 @@ from app.config import get_settings, load_apps_config
 from app.core.service import AppReleaseService
 from app.core.watch_fingerprint import (
     is_ops_fingerprint,
+    is_terminal_full_release_fp,
     ops_fp_state,
     ops_watch_fingerprint,
     synthesize_message_from_ops_fp,
@@ -28,6 +29,27 @@ _last_fingerprint: dict[str, str] = {}
 def _fingerprint_status(status) -> str:
     """运营向指纹：状态 + 放量；放量不变则不通知。"""
     return ops_watch_fingerprint(status)
+
+
+def _close_watch_if_terminal(disk_key: str, fp: str, *, reason: str) -> None:
+    """本地盯盘关闭：不写商店。仅当指纹已是全量终态。
+
+    不改 note / 其它业务字段，避免覆盖运营备注；只把 active 置假并固化指纹。
+    """
+    if not is_terminal_full_release_fp(fp):
+        return
+    target = update_target_fields(
+        disk_key,
+        active=False,
+        last_fingerprint=fp,
+    )
+    if target is not None:
+        logger.info(
+            "watch closed after full release key={} fp={} reason={}",
+            disk_key,
+            fp,
+            reason,
+        )
 
 
 def _is_transient_fp(fp: str) -> bool:
@@ -78,11 +100,13 @@ def poll_review_status_job() -> None:
                 _last_fingerprint[mem_key] = fp
                 if target:
                     update_target_fields(key, last_fingerprint=fp)
+                    _close_watch_if_terminal(key, fp, reason="first_seen_terminal")
             elif _is_transient_fp(prev):
                 # 历史误把代理错误落成指纹：恢复真实状态时静默纠正，不刷屏
                 _last_fingerprint[mem_key] = fp
                 if target:
                     update_target_fields(key, last_fingerprint=fp)
+                    _close_watch_if_terminal(key, fp, reason="healed_to_terminal")
                 logger.info(
                     "watch healed transient fingerprint silently key={}",
                     key,
@@ -92,6 +116,7 @@ def poll_review_status_job() -> None:
                 _last_fingerprint[mem_key] = fp
                 if target:
                     update_target_fields(key, last_fingerprint=fp)
+                    _close_watch_if_terminal(key, fp, reason="migrated_to_terminal")
                 logger.info("watch migrated fingerprint to ops_v1 key={}", key)
             else:
                 changed.append(status)
@@ -104,8 +129,17 @@ def poll_review_status_job() -> None:
                     previous_message=synthesize_message_from_ops_fp(prev),
                     current_message=status.message,
                 )
+        else:
+            # 指纹未变：若已是全量终态，关闭本地盯盘（历史遗留 active 目标）
+            if target and target.active:
+                _close_watch_if_terminal(key, fp, reason="already_terminal")
 
-        if target and target.heartbeat_hours > 0 and not cur_transient:
+        if (
+            target
+            and target.heartbeat_hours > 0
+            and not cur_transient
+            and not is_terminal_full_release_fp(fp)
+        ):
             now = time.time()
             elapsed_h = (now - (target.last_heartbeat_at or target.submitted_at)) / 3600.0
             if elapsed_h >= target.heartbeat_hours:
@@ -150,13 +184,16 @@ def poll_review_status_job() -> None:
                 title=title,
                 footer=console_hints_for([s.platform.value for s in changed]),
             )
-            # 通知成功后再提交指纹
+            # 通知成功后再提交指纹；全量终态则关闭本地盯盘
             for mem_key, fp in pending_fps:
                 _last_fingerprint[mem_key] = fp
                 if mem_key.startswith("watch:"):
                     disk_key = mem_key[len("watch:") :]
                     if disk_key in targets_by_key:
                         update_target_fields(disk_key, last_fingerprint=fp)
+                        _close_watch_if_terminal(
+                            disk_key, fp, reason="notified_terminal"
+                        )
         except Exception:  # noqa: BLE001
             logger.exception(
                 "notify review status failed; fingerprints NOT advanced (will retry)"

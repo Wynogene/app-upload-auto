@@ -31,7 +31,11 @@ def ops_watch_fingerprint(status: ReviewStatus) -> str:
         pct = phased_percent_for_day(day) if day is not None else None
         # 用户约定：放量百分比不变不通知 → 用 Apple 曲线百分比，不用「第 N 天」原文噪音
         phased_s = (phased or "-").upper()
-        pct_s = str(pct) if pct is not None else "-"
+        if phased_s == "COMPLETE":
+            # 分批结束即全量；统一成 100，避免 COMPLETE|- 与 COMPLETE|100 来回抖
+            pct_s = "100"
+        else:
+            pct_s = str(pct) if pct is not None else "-"
         return f"{OPS_FP_PREFIX}{state}|ios|{phased_s}|{pct_s}"
 
     return f"{OPS_FP_PREFIX}{state}|{plat}|-|-"
@@ -92,3 +96,26 @@ def ops_fp_state(fp: str | None) -> str:
     if "|" in fp:
         return fp.split("|", 1)[0]
     return fp
+
+
+def is_terminal_full_release_fp(fp: str | None) -> bool:
+    """是否已达「全量上线」终态（可关闭盯盘，无需再扫）。
+
+    - Android：``released`` + production ``completed``（无 userFraction = 全量）
+    - iOS：``released`` + 分批 ``COMPLETE``（曲线已结束）
+    仅识别 ops_v1 指纹；旧全文指纹不擅自关闭，避免误伤。
+    """
+    if not is_ops_fingerprint(fp):
+        return False
+    parts = str(fp).split("|")
+    # ops_v1 | state | platform | a | b
+    if len(parts) < 5:
+        return False
+    state, platform, a, b = parts[1], parts[2], parts[3], parts[4]
+    if state != "released":
+        return False
+    if platform == "android":
+        return a == "completed" and b == "-"
+    if platform == "ios":
+        return a == "COMPLETE"
+    return False

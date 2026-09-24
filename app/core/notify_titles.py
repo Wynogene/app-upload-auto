@@ -10,7 +10,11 @@ import re
 
 from app.core.rollout import describe_rollout
 from app.models import ReviewState
-from app.stores.apple_phased import ios_phased_notify_title
+from app.stores.apple_phased import (
+    ios_phased_notify_title,
+    parse_phased_fingerprint,
+    phased_percent_for_day,
+)
 from app.stores.google_lifecycle import approval_notify_title
 
 _ANDROID_TRACK_LINE_RE = re.compile(
@@ -122,18 +126,87 @@ def android_rollout_notify_title(
         return None
 
     if new_status == "halted" and prev_status != "halted":
-        return "Android 分批已停发（halted）"
+        return "Android 分批已停发 · 放量冻结（尚未全量）"
     if prev_status == "halted" and new_status and new_status != "halted":
         pct = describe_rollout(new_frac)
-        return f"Android 分批已恢复放量（{pct}）"
+        return f"Android 分批已恢复 · 继续放量（{pct}，尚未全量）"
+
+    if new_status == "completed" and prev_status != "completed":
+        return "Android 分批结束 · 已全量 100%"
 
     if prev_frac != new_frac and new_frac is not None:
+        if new_frac >= 0.999:
+            return "Android 分批结束 · 已全量 100%"
         if prev_frac is not None:
             return (
-                f"Android 放量比例变更"
-                f"（{describe_rollout(prev_frac)} → {describe_rollout(new_frac)}）"
+                f"Android 分批进行中 · 放量 "
+                f"{describe_rollout(prev_frac)} → {describe_rollout(new_frac)}"
             )
-        return f"Android 放量比例更新（{describe_rollout(new_frac)}）"
+        return f"Android 分批进行中 · 放量 {describe_rollout(new_frac)}"
+
+    return None
+
+
+def ios_watch_notify_title(
+    previous_state: ReviewState | str | None,
+    current_state: ReviewState | str | None,
+    *,
+    previous_message: str | None = None,
+    current_message: str | None = None,
+) -> str | None:
+    """iOS 盯盘标题：把「刚上线·分批中」和「分批结束·全量」说开。
+
+    仅在正文像 iOS（含分批/构建/已上线等）时生效，避免误伤 Android。
+    """
+    new_msg = current_message or ""
+    prev_msg = previous_message or ""
+    # Android production 行特征
+    if re.search(r"production\s*:", new_msg, re.I) and "rollout=" in new_msg.lower():
+        return None
+    looks_ios = any(
+        k in new_msg
+        for k in ("分批", "构建", "ASC", "TestFlight", "已上线", "等待出口合规", "手动发布")
+    )
+    if not looks_ios and "分批" not in prev_msg:
+        return None
+
+    prev = _state_value(previous_state)
+    cur = _state_value(current_state)
+    reviewing = {
+        ReviewState.IN_REVIEW.value,
+        ReviewState.WAITING_FOR_REVIEW.value,
+    }
+    new_ph, new_day = parse_phased_fingerprint(new_msg)
+    prev_ph, _prev_day = parse_phased_fingerprint(prev_msg)
+
+    # 审核中 → 已上线：按分批阶段给不同标题
+    if cur == ReviewState.RELEASED.value and prev in reviewing:
+        if new_ph == "ACTIVE":
+            pct = phased_percent_for_day(new_day)
+            day_bit = f"第{new_day}天" if new_day is not None else "进行中"
+            pct_bit = f"≈{pct}%" if pct is not None else ""
+            return f"iOS 已上线 · 分批放量进行中（{day_bit}{pct_bit}，尚未全量）"
+        if new_ph == "COMPLETE":
+            return "iOS 已上线 · 当前已是全量（分批已结束）"
+        if new_ph == "PAUSED":
+            return "iOS 已上线 · 分批已暂停（尚未全量）"
+        if new_ph in {None, "INACTIVE"}:
+            return "iOS 已上线 · 分批尚未开始或未开启"
+
+    # 已在线：分批状态变化（含 ACTIVE→COMPLETE）
+    phased_title = ios_phased_notify_title(prev_msg, new_msg)
+    if phased_title:
+        return phased_title
+
+    # 已 released，正文只有「已上线」且分批未解析到，避免落到「审核/发布状态变化」
+    if (
+        cur == ReviewState.RELEASED.value
+        and prev == ReviewState.RELEASED.value
+        and "已上线" in new_msg
+        and not new_ph
+        and prev_ph
+    ):
+        return "iOS 上线状态刷新 · 分批信息暂缺"
 
     return None
 
@@ -145,7 +218,7 @@ def review_change_notify_title(
     previous_message: str | None = None,
     current_message: str | None = None,
 ) -> str:
-    """标题优先级：阻塞项 → 待发布 → 过审/被拒 → 放量 → 分批 → 通用。"""
+    """标题优先级：阻塞项 → 待发布 → iOS 分批/上线分层 → 过审/被拒 → Android 放量 → 通用。"""
     return (
         ios_blocker_notify_title(previous_message, current_message)
         or publish_action_notify_title(
@@ -153,8 +226,13 @@ def review_change_notify_title(
             current_state,
             current_message=current_message,
         )
+        or ios_watch_notify_title(
+            previous_state,
+            current_state,
+            previous_message=previous_message,
+            current_message=current_message,
+        )
         or approval_notify_title(previous_state, current_state)
         or android_rollout_notify_title(previous_message, current_message)
-        or ios_phased_notify_title(previous_message, current_message)
         or "审核/发布状态变化"
     )
